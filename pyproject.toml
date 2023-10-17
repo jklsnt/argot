@@ -1,0 +1,21 @@
+[tool.poetry]
+name = "argot"
+version = "0.1.0"
+description = ""
+authors = ["quantumish <freifeld.david@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.10"
+peewee = "^3.17.0"
+flask = "^3.0.0"
+flask-restful = "^0.3.10"
+flask-sock = "^0.7.0"
+marshmallow = "^3.20.1"
+psycopg2 = "^2.9.9"
+bs4 = "^0.0.1"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
