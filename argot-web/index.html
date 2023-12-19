@@ -316,6 +316,28 @@
 			}
 		}
 
+		class StyleVirtualEffect extends VirtualEffect {
+			constructor(key, id, value) {
+				super();
+
+				this.key = key;
+				this.id = id;
+				this.value = value;
+			}
+
+			mount(target) {
+				target.style.setProperty(this.id, this.value);
+			}
+
+			unmount(target) {
+				target.style.removeProperty(this.id);
+			}
+
+			update(target, new_state) {
+				target.style.setProperty(this.id, new_state.value);
+			}
+		}
+
 		function effect(key, mount_handler) {
 			return new ClosureVirtualEffect(`effect_${key}`, mount_handler);
 		}
@@ -326,6 +348,10 @@
 
 		function handler(key, handler) {
 			return new HandlerVirtualEffect(`handler_${key}`, key, handler);
+		}
+
+		function style(key, value) {
+			return new StyleVirtualEffect(`style_${key}`, key, value);
 		}
 
 		// ====================================================================================
@@ -345,20 +371,26 @@
 
 		function AppRootView(state) {
 			return tree("div", [
+				effect("configure_webpage", () => {
+					document.bgColor = "pink";
+				}),
 				tree("h1", ["Argot"]),
 				tree("p", [
 					tree("button", [
 						prop("onclick", () => (state.view = "home")),
+						style("color", state.view === "home" ? "red" : "inherit"),
 						"Home",
 					]),
 					"\u{202F}",
 					tree("button", [
 						handler("click", () => (state.view = "about")),
+						style("color", state.view === "about" ? "red" : "inherit"),
 						"About",
 					]),
 					"\u{202F}",
 					tree("button", [
 						handler("click", () => (state.view = "submit")),
+						style("color", state.view === "submit" ? "red" : "inherit"),
 						"Submit",
 					]),
 				]),
