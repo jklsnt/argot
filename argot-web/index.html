@@ -36,11 +36,12 @@
 				this.set.add(child);
 			}
 
-			apply(container/*: Node*/) {
+			apply(container/*: Node*/, write_removed_to) {
 				// Remove all missing children.
 				for (const child of [...container.childNodes]) {
 					if (!this.set.has(child)) {
 						child.remove();
+						write_removed_to.push(child);
 					}
 				}
 
@@ -57,7 +58,7 @@
 		}
 
 		function getDomKey(t) {
-			return t.dataset["key"];
+			return t instanceof Element ? t.dataset["key"] : undefined;
 		}
 
 		function setDomKey(t, v) {
@@ -214,7 +215,7 @@
 
 				// We skip over keyed elements when doing this determination because keyed elements and regular elements
 				// are merged in separately.
-				while (dom_read_curr !== undefined && dom_read_curr.key !== undefined) {
+				while (dom_read_curr !== undefined && getDomKey(dom_read_curr) !== undefined) {
 					dom_read_curr = dom.childNodes[++dom_read_cursor];
 				}
 
@@ -247,9 +248,14 @@
 			}
 
 			// Now, we just have to apply the builder's layout to the element.
-			builder.apply(dom);
+			const removed = []
+			builder.apply(dom, removed);
 
 			// Now process the effects.
+			for (const child of removed) {
+				derender(child);
+			}
+
 			for (const [effect_key, effect] of effect_map.entries()) {
 				if (effect.new_state === SENTINEL_MOUNT) {
 					effect.mount(dom);
@@ -259,6 +265,30 @@
 				} else {
 					effect.update(dom, effect.new_state);
 				}
+			}
+		}
+
+		/**
+		 * Strips an entire DOM tree of effects and caches.
+		 */
+		function derender(dom) {
+			// Remove its last state cache
+			DOM_LAST_STATES.delete(dom);
+
+			// Clear its effects
+			const effects = DOM_EFFECTS.get(dom);
+
+			if (effects !== undefined) {
+				DOM_EFFECTS.delete(dom);
+
+				for (const effect of effects.values()) {
+					effect.unmount(dom);
+				}
+			}
+
+			// Recurse into its children
+			for (const child of [...dom.childNodes]) {
+				derender(child);
 			}
 		}
 
@@ -523,7 +553,7 @@
 			}
 
 			renderImmediately() {
-				return tree("div", "submit_view", [
+				return tree("div", "submit_page", [
 					effect("whee", (target) => {
 						console.log("Mounted", target);
 						return target => console.log("Unmounted", target);
