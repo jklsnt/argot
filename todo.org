@@ -1,0 +1,13 @@
+
+* short term
+- comment view
+- authentication
+- easy linking to other comments?
+  
+* medium term
+- tagging support
+- searching
+
+* long term
+- other frontends
+- themeable
