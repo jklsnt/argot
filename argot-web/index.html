@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title> Argot </title>
+</head>
+
+<body>
+	<noscript> Argot requires JavaScript to be enabled. </noscript>
+	<div id="app_container"></div>
+
+	<script>
+		// Hey, I heard you liked single page apps!
+
+		// ====================================================================================
+		// We begin by defining a custom UI framework because all the other frameworks have the
+		// fatal flaw of not being invented here.
+		// ====================================================================================
+
+		// Internals
+		const DOM_LAST_TREE = Symbol("DOM_LAST_TREE");
+		const DOM_LAST_PROP_SET = Symbol("DOM_LAST_PROP_SET");
+		const MOUNT_HANDLER = Symbol("MOUNT_HANDLER");
+		const UNMOUNT_HANDLER = Symbol("UNMOUNT_HANDLER");
+
+		class NodeChildBuilder {
+			constructor() {
+				this.arr = [];
+				this.set = new Set();
+			}
+
+			push(child/*: Node*/) {
+				this.arr.push(child);
+				this.set.add(child);
+			}
+
+			apply(container/*: Node*/) {
+				// Remove all missing children.
+				for (const child of [...container.childNodes]) {
+					if (!this.set.has(child)) {
+						child.remove();
+					}
+				}
+
+				// Ensure that all children are inserted where they need to be.
+				for (let i = this.arr.length - 1; i >= 0; i--) {
+					const current = this.arr[i];
+					const expected_next = this.arr[i + 1];
+
+					if (current.nextSibling != expected_next || current.parentNode !== container) {
+						container.insertBefore(current, expected_next ?? null);
+					}
+				}
+			}
+		}
+
+		// Public
+		const KEY = Symbol("KEY");
+
+		/**
+		 * Constructs a virtual DOM element.
+		 */
+		function tree(tag, attrs, children) {
+			// TODO: Overloads, coercions, and validation.
+			return { tag, attrs, children: children.flat() };
+		}
+
+		/**
+		 * Applies the specified property set to the target node.
+		 */
+		function renderProps(target, attrs) {
+			// Remove attributes which were set in the previous iteration
+			// and no longer have a setting.
+			for (const old of target[DOM_LAST_PROP_SET] ?? []) {
+				if (!(old in attrs))
+					delete target[old];
+			}
+
+			// For every specified attribute...
+			const new_prop_list = [
+				...Object.keys(attrs),
+				...Object.getOwnPropertySymbols(attrs),
+			];
+
+			// Set it...
+			for (const key of new_prop_list) {
+				target[key] = attrs[key];
+			}
+
+			// And remember that last set of manually written attributes.
+			target[DOM_LAST_PROP_SET] = new_prop_list;
+		}
+
+		/**
+		 * Applies the specified virtual DOM `tree` to the DOM target.
+		 */
+		function render(dom/*: Element*/, tree/*: Tree */) /*: void */ {
+			// If this DOM element already reflects the target tree, don't do anything.
+			if (dom[DOM_LAST_TREE] === tree) return;
+			dom[DOM_LAST_TREE] = tree;
+
+			// The root `tagName` must never change. Note that, when recursing, we always check the
+			// tag name so this indeed only check for root changes.
+			console.assert(dom.tagName === tree.tag.toUpperCase());
+
+			// Collect elements which need mounting an unmounting
+			const needs_mount_call = new Set();
+			const needs_unmount_call = new Set();
+
+			// Collect keyed DOM elements and remove them from their parent.
+			const key_map = new Map();
+			for (const child of dom.children) {  // Only `Element`s can have keys.
+				if (child[KEY] !== undefined) {
+					key_map.set(child[KEY], child);
+
+					if (child[UNMOUNT_HANDLER] !== undefined) {
+						needs_unmount_call.add(child);
+					}
+				}
+			}
+
+			// Reconcile this element's attributes.
+			renderProps(dom, tree.attrs);
+
+			// Reconcile the DOM children using our discount version of React's heuristic algorithm.
+
+			// `dom_read_cursor` is a node index, not an element index. Additionally, it may be out of bounds.
+			let dom_read_cursor = 0;
+
+			const builder = new NodeChildBuilder();
+
+			for (let tree_cursor = 0; tree_cursor < tree.children.length; tree_cursor += 1) {
+				// First, let's determine what needs to be added next.
+				const tree_curr = tree.children[tree_cursor];
+
+				// If this is a keyed element, we grab it from the key collection
+				if (typeof tree_curr !== "string" && tree_curr.attrs[KEY] !== undefined) {
+					let element = key_map.get(tree_curr.attrs[KEY]);
+
+					// If this element didn't exist previously or has changed tag, create it de-novo.
+					// In the latter case, we'll delete this element during the cleanup phase so no additional
+					// work is required.
+					if (element === undefined || element.tagName !== tree_curr.tag.toUpperCase()) {
+						element = document.createElement(tree_curr.tag);
+
+						// Now, render it.
+						render(element, tree_curr);
+
+						// Since this is new, we may need to mount it.
+						if (element[MOUNT_HANDLER] !== undefined) {
+							needs_mount_call.add(element);
+						}
+					} else {
+						// Otherwise, remove it from the map to prevent it from being used later.
+						key_map.delete(tree_curr.attrs[KEY]);
+
+						// Also, since it's been used, we no longer need to unmount it.
+						needs_unmount_call.delete(element);
+
+						// Now, render it.
+						render(element, tree_curr);
+					}
+
+					// Push it to the builder.
+					builder.push(element);
+
+					continue;
+				}
+
+				// Otherwise, we attempt to update the existing DOM element to match ours.
+				let dom_read_curr = dom.childNodes[dom_read_cursor];
+
+				// We skip over keyed elements when doing this determination because keyed elements and regular elements
+				// are merged in separately.
+				while (dom_read_curr !== undefined && dom_read_curr[KEY] !== undefined) {
+					dom_read_curr = dom.childNodes[++dom_read_cursor];
+				}
+
+				// Attempt to determine which new node should be at this place.
+				if (typeof tree_curr === "string") {
+					// If we're expecting a string...
+					if (!(dom_read_curr instanceof Text)) {
+						// And the previous element wasn't a string, create it de-novo.
+						dom_read_curr = new Text(tree_curr);
+					} else if (dom_read_curr.data !== tree_curr) {
+						// Otherwise, update the existing text without updating the `dom_read_curr`.
+						dom_read_curr.data = tree_curr;
+					}
+				} else if (!(dom_read_curr instanceof Element) || dom_read_curr.tagName !== tree_curr.tag.toUpperCase()) {
+					// If the current DOM node isn't an Element or its tagName is different, create it de-novo.
+					dom_read_curr = document.createElement(tree_curr.tag);
+					render(dom_read_curr, tree_curr);
+				} else {
+					// Both of these objects are elements of the same tag so we can diff them
+					// directly.
+					render(dom_read_curr, tree_curr);
+				}
+
+				// Push the `dom_read_curr` to the builder.
+				builder.push(dom_read_curr);
+
+				// Even if we don't end up using the DOM node, we still need to consume it. Note that
+				// this may cause `dom_read_cursor` to go out of bounds.
+				dom_read_cursor += 1;
+			}
+
+			// Now, we just have to apply the builder's layout to the element.
+			builder.apply(dom);
+
+			// Now process mounts.
+			// TODO: Maybe run this after the entire tree has been reconciled?
+			for (const child of needs_unmount_call) {
+				child[UNMOUNT_HANDLER].call(child);
+			}
+
+			for (const child of needs_mount_call) {
+				child[MOUNT_HANDLER].call(child);
+			}
+		}
+
+		// ====================================================================================
+		// Our custom UI framework requires a separation between model and view+controller so
+		// we define our model here.
+		// ====================================================================================
+
+		class AppRoot {
+			constructor() {
+				this.view = "home";
+			}
+		}
+
+		// ====================================================================================
+		// Now, we can define the application's view components.
+		// ====================================================================================
+
+		function AppRootView(state) {
+			return tree("div", {}, [
+				tree("h1", {}, ["Argot"]),
+				tree("p", {}, [
+					tree("button", { onclick: () => (state.view = "home"), }, ["Home"]),
+					"\u{202F}",
+					tree("button", { onclick: () => (state.view = "about"), }, ["About"]),
+					"\u{202F}",
+					tree("button", { onclick: () => (state.view = "submit"), }, ["Submit"]),
+				]),
+				tree("hr", {}, []),
+				{
+					"home": HomeView,
+					"about": AboutView,
+					"submit": SubmitView,
+				}
+				[state.view](state),
+			]);
+		}
+
+		function HomeView(state) {
+			return tree("div", {}, []);
+		}
+
+		function AboutView(state) {
+			return tree("div", {}, [
+				tree("p", {}, ["Welcome to Argot! This is a super duper serious link sharing website for intellectuals! Nya~"]),
+				tree("img", { src: "https://pbs.twimg.com/media/DT_YODIWkAEKH8X.jpg" }, []),
+				tree("p", {}, ["Ferris The Crab~ This is so nya-tastic!!111"]),
+			]);
+		}
+
+		function SubmitView(state) {
+			return tree("div", {
+				[KEY]: "submit_view",
+				[MOUNT_HANDLER]() {
+					const name_field = this.querySelector("#name_field");
+					const url_field = this.querySelector("#url_field");
+
+					this.querySelector("#submit_button").addEventListener("click", () => {
+						console.log(name_field.value);
+						console.log(url_field.value);
+					});
+				},
+			}, [
+				tree("h2", {}, ["Submit your link here!"]),
+				tree("p", {}, [
+					"Name:",
+					"\u{202F}",
+					tree("input", { id: "name_field" }, []),
+				]),
+				tree("p", {}, [
+					"URL:",
+					"\u{202F}",
+					tree("input", { id: "url_field" }, []),
+				]),
+				tree("button", { id: "submit_button" }, ["Submit"]),
+			]);
+		}
+
+		// ====================================================================================
+		// Finally, let's start up the application!
+		// ====================================================================================
+
+		const APP_STATE = new AppRoot();
+
+		function tick() {
+			requestAnimationFrame(tick);
+			render(app_container, AppRootView(APP_STATE));
+		}
+
+		requestAnimationFrame(tick);
+	</script>
+</body>
+
+</html>
