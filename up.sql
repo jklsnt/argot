@@ -4,6 +4,5 @@ CREATE TABLE posts (
   link 	     TEXT,
   author     TEXT NOT NULL,
   posted     TIMESTAMP NOT NULL,
-  content    TEXT,
-  tags 	     TEXT[]  
+  content    TEXT
 );

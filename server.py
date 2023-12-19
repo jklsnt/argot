@@ -26,11 +26,11 @@ class PostSchema(Schema):
     title = fields.Str()
     link = fields.Url()
     author = fields.Str(required=True)
-    tags = fields.List(fields.Str())
+    # tags = fields.List(fields.Str())
 
 class PostsQuerySchema(Schema):    
     pg = fields.Int()
-    tags = fields.List(fields.Str())
+    # tags = fields.List(fields.Str())
     
     
 postq_schema = PostQuerySchema()
@@ -71,7 +71,7 @@ class PostEndpoint(Resource):
             title,
             request.args["author"],
             content=request.data,
-            tags=request.args["tags"] if "tags" in request.args else []
+            # tags=request.args["tags"] if "tags" in request.args else []
         )
 
         return str(p.id), 200

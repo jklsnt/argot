@@ -1,10 +1,10 @@
 from datetime import datetime
 
 from peewee import *
-from playhouse.postgres_ext import *
+# from playhouse.postgres_ext import *
 import uuid
 
-db = PostgresqlExtDatabase('argot')
+db = SqliteDatabase('./argot.db')
 
 class Post(Model):
     id = UUIDField(primary_key=True)
@@ -13,7 +13,7 @@ class Post(Model):
     author = TextField()
     posted = DateTimeField()
     content = TextField()
-    tags = ArrayField(TextField)
+    # tags = ArrayField(TextField)
 
     class Meta:
         database = db
@@ -27,7 +27,7 @@ class Post(Model):
             author=author,
             posted=time,
             content=content,
-            tags=[] if tags is None else tags,
+            # tags=[] if tags is None else tags,
         )
 
     def to_dict(self):
@@ -37,5 +37,5 @@ class Post(Model):
             "author": self.author,
             "posted": self.posted.timestamp(),
             "content": self.content,
-            "tags": self.tags
+            # "tags": self.tags
         }
