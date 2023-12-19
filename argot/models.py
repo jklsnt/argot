@@ -1,6 +1,10 @@
 from datetime import datetime
+import secrets
+import hashlib
+import string
 
 from peewee import *
+from flask_login import UserMixin
 
 def date_str(dt):
     """Scuffed func to convert datetime to relative time in natural language.
@@ -28,7 +32,7 @@ db = SqliteDatabase('./argot.db', pragmas={
     'ignore_check_constraints': 0,
     'synchronous': 0})
 
-class User(Model):
+class User(UserMixin, Model):
     class Meta:
         database = db
         table_name = "users"
@@ -36,14 +40,31 @@ class User(Model):
     id = AutoField(primary_key=True)
     nick = TextField()
     bio = TextField(null=True)
+    email = TextField(null=True)
+    hash = TextField()
+    salt = TextField()
 
+    def new(nick, password, bio=None, email=None):
+        alphabet = string.ascii_letters + string.digits
+        salt = ''.join(secrets.choice(alphabet) for i in range(8))
+
+        dk = hashlib.scrypt(password.encode(), salt=salt.encode(), n=16384, r=8, p=1)
+        
+        return User.create(
+            nick=nick,
+            hash=dk.hex(),
+            salt=salt,
+            email=email,
+            bio=bio
+        )    
+    
     def to_dict(self):
         return {
             "nick": self.nick,
             "bio": self.bio
         }
 
-    
+
 class Post(Model):
     id = AutoField(primary_key=True)
     title = TextField()
