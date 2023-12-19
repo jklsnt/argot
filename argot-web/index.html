@@ -20,10 +20,9 @@
 		// ====================================================================================
 
 		// Internals
-		const DOM_LAST_TREE = Symbol("DOM_LAST_TREE");
-		const DOM_LAST_PROP_SET = Symbol("DOM_LAST_PROP_SET");
-		const MOUNT_HANDLER = Symbol("MOUNT_HANDLER");
-		const UNMOUNT_HANDLER = Symbol("UNMOUNT_HANDLER");
+		const DOM_EFFECTS = new WeakMap();
+		const SENTINEL_MOUNT = Symbol("SENTINEL_MOUNT");
+		const SENTINEL_UNMOUNT = Symbol("SENTINEL_UNMOUNT");
 
 		class NodeChildBuilder {
 			constructor() {
@@ -56,73 +55,94 @@
 			}
 		}
 
+		function getDomKey(t) {
+			return t.dataset["key"];
+		}
+
+		function setDomKey(t, v) {
+			t.dataset["key"] = v;
+		}
+
 		// Public
-		const KEY = Symbol("KEY");
+
+		/**
+		 * Determine whether a given object is a valid virtual node.
+		 */
+		function isValidVirtualNode(v) {
+			return typeof v === "string" || v instanceof VirtualElement || v instanceof VirtualEffect;
+		}
+
+		/**
+		 * A virtual element to reconcile into the DOM.
+		 */
+		class VirtualElement {
+			constructor(tag, key, children) {
+				console.assert(typeof tag === "string");
+				console.assert(typeof key === "string" || key == null);
+				console.assert(children instanceof Array && children.every(isValidVirtualNode));
+
+				this.tag = tag.toUpperCase();
+				this.key = key;
+				this.children = children;
+			}
+		}
+
+		/**
+		 * The base class of all effects in the virtual DOM applying to the DOM.
+		*/
+		class VirtualEffect {
+			constructor() {
+				this.new_state = null;
+				this.key = this;
+			}
+
+			mount(target) { }
+
+			unmount(target) { }
+
+			update(target) { }
+		}
 
 		/**
 		 * Constructs a virtual DOM element.
 		 */
-		function tree(tag, attrs, children) {
-			// TODO: Overloads, coercions, and validation.
-			return { tag, attrs, children: children.flat() };
-		}
-
-		/**
-		 * Applies the specified property set to the target node.
-		 */
-		function renderProps(target, attrs) {
-			// Remove attributes which were set in the previous iteration
-			// and no longer have a setting.
-			for (const old of target[DOM_LAST_PROP_SET] ?? []) {
-				if (!(old in attrs))
-					delete target[old];
-			}
-
-			// For every specified attribute...
-			const new_prop_list = [
-				...Object.keys(attrs),
-				...Object.getOwnPropertySymbols(attrs),
-			];
-
-			// Set it...
-			for (const key of new_prop_list) {
-				target[key] = attrs[key];
-			}
-
-			// And remember that last set of manually written attributes.
-			target[DOM_LAST_PROP_SET] = new_prop_list;
+		function tree(tag, key_or_children, children) {
+			return children === undefined ?
+				new VirtualElement(tag, null, key_or_children.flat()) :
+				new VirtualElement(tag, key_or_children, children.flat());
 		}
 
 		/**
 		 * Applies the specified virtual DOM `tree` to the DOM target.
 		 */
-		function render(dom/*: Element*/, tree/*: Tree */) /*: void */ {
-			// If this DOM element already reflects the target tree, don't do anything.
-			if (dom[DOM_LAST_TREE] === tree) return;
-			dom[DOM_LAST_TREE] = tree;
+		function render(dom/*: Element*/, tree/*: VirtualElement */) /*: void */ {
+			console.assert(tree instanceof VirtualElement);
 
 			// The root `tagName` must never change. Note that, when recursing, we always check the
 			// tag name so this indeed only check for root changes.
-			console.assert(dom.tagName === tree.tag.toUpperCase());
+			console.assert(dom.tagName === tree.tag);
 
-			// Collect elements which need mounting an unmounting
-			const needs_mount_call = new Set();
-			const needs_unmount_call = new Set();
+			// Ensure that our element has an entry in the effect map
+			let effect_map = DOM_EFFECTS.get(dom);
+			if (effect_map == null) {
+				effect_map = new Map();
+				DOM_EFFECTS.set(dom, effect_map);
+			}
+
+			// Mark every existing effect as requiring an unmount
+			for (const effect of effect_map.values()) {
+				effect.new_state = SENTINEL_UNMOUNT;
+			}
 
 			// Collect keyed DOM elements and remove them from their parent.
 			const key_map = new Map();
-			for (const child of dom.children) {  // Only `Element`s can have keys.
-				if (child[KEY] !== undefined) {
-					key_map.set(child[KEY], child);
 
-					if (child[UNMOUNT_HANDLER] !== undefined) {
-						needs_unmount_call.add(child);
-					}
+			for (const child of dom.children) {  // Only `Element`s can have keys.
+				const child_key = getDomKey(child);
+				if (child_key !== undefined) {
+					key_map.set(child_key, child);
 				}
 			}
-
-			// Reconcile this element's attributes.
-			renderProps(dom, tree.attrs);
 
 			// Reconcile the DOM children using our discount version of React's heuristic algorithm.
 
@@ -135,29 +155,41 @@
 				// First, let's determine what needs to be added next.
 				const tree_curr = tree.children[tree_cursor];
 
+				// Add effects to the map.
+				if (tree_curr instanceof VirtualEffect) {
+					const effect_key = tree_curr.key;
+					let entry = effect_map.get(effect_key);
+					// If this is a novel effect, add it to the old effect map with a mounted state.
+					if (entry == null) {
+						entry = tree_curr;
+						effect_map.set(effect_key, entry);
+						tree_curr.new_state = SENTINEL_MOUNT;
+					} else {
+						// Otherwise, just set its new state.
+						entry.new_state = tree_curr;
+					}
+
+					continue;
+				}
+
 				// If this is a keyed element, we grab it from the key collection
-				if (typeof tree_curr !== "string" && tree_curr.attrs[KEY] !== undefined) {
-					let element = key_map.get(tree_curr.attrs[KEY]);
+				if (typeof tree_curr !== "string" && tree_curr.key != null) {
+					let element = key_map.get(tree_curr.key);
 
 					// If this element didn't exist previously or has changed tag, create it de-novo.
 					// In the latter case, we'll delete this element during the cleanup phase so no additional
 					// work is required.
-					if (element === undefined || element.tagName !== tree_curr.tag.toUpperCase()) {
+					if (element === undefined || element.tagName !== tree_curr.tag) {
 						element = document.createElement(tree_curr.tag);
 
 						// Now, render it.
 						render(element, tree_curr);
 
-						// Since this is new, we may need to mount it.
-						if (element[MOUNT_HANDLER] !== undefined) {
-							needs_mount_call.add(element);
-						}
+						// ...and set its key.
+						setDomKey(element, tree_curr.key);
 					} else {
 						// Otherwise, remove it from the map to prevent it from being used later.
-						key_map.delete(tree_curr.attrs[KEY]);
-
-						// Also, since it's been used, we no longer need to unmount it.
-						needs_unmount_call.delete(element);
+						key_map.delete(tree_curr.key);
 
 						// Now, render it.
 						render(element, tree_curr);
@@ -174,7 +206,7 @@
 
 				// We skip over keyed elements when doing this determination because keyed elements and regular elements
 				// are merged in separately.
-				while (dom_read_curr !== undefined && dom_read_curr[KEY] !== undefined) {
+				while (dom_read_curr !== undefined && dom_read_curr.key !== undefined) {
 					dom_read_curr = dom.childNodes[++dom_read_cursor];
 				}
 
@@ -209,15 +241,91 @@
 			// Now, we just have to apply the builder's layout to the element.
 			builder.apply(dom);
 
-			// Now process mounts.
-			// TODO: Maybe run this after the entire tree has been reconciled?
-			for (const child of needs_unmount_call) {
-				child[UNMOUNT_HANDLER].call(child);
+			// Now process the effects.
+			for (const [effect_key, effect] of effect_map.entries()) {
+				if (effect.new_state === SENTINEL_MOUNT) {
+					effect.mount(dom);
+				} else if (effect.new_state === SENTINEL_UNMOUNT) {
+					effect.unmount(dom);
+					effect_map.delete(effect_key);  // Concurrent deletion works well in Map.
+				} else {
+					effect.update(dom, effect.new_state);
+				}
+			}
+		}
+
+		// Extensions
+		class ClosureVirtualEffect extends VirtualEffect {
+			constructor(key, mount_handler) {
+				super();
+
+				this.key = key;
+				this.mount_handler = mount_handler;
+				this.unmount_handler = null;
 			}
 
-			for (const child of needs_mount_call) {
-				child[MOUNT_HANDLER].call(child);
+			mount(target) {
+				this.unmount_handler = this.mount_handler(target);
 			}
+
+			unmount(target) {
+				if (this.unmount_handler != null) {
+					this.unmount_handler(target);
+					this.unmount_handler = null;
+				}
+			}
+		}
+
+		class PropVirtualEffect extends VirtualEffect {
+			constructor(key, value) {
+				super();
+
+				this.key = `prop_${key}`;
+				this.prop_key = key;
+				this.prop_value = value;
+			}
+
+			mount(target) {
+				target[this.prop_key] = this.prop_value;
+			}
+
+			unmount(target) {
+				delete target[this.prop_key];
+			}
+
+			update(target, new_value) {
+				target[this.prop_key] = new_value.prop_value;
+			}
+		}
+
+		class HandlerVirtualEffect extends VirtualEffect {
+			constructor(key, id, handler) {
+				super();
+
+				this.key = key;
+				this.id = id;
+				this.handler = handler;
+			}
+
+			mount(target) {
+				target.addEventListener(this.id, this.handler);
+			}
+
+			unmount(target) {
+				target.removeEventListener(this.id, this.handler);
+			}
+		}
+
+		function effect(key, mount_handler) {
+			return new ClosureVirtualEffect(`effect_${key}`, mount_handler);
+		}
+
+		function prop(key, value) {
+			return new PropVirtualEffect(key, value);
+		}
+
+		function handler(key, handler) {
+			return new HandlerVirtualEffect(`handler_${key}`, key, handler);
 		}
 
 		// ====================================================================================
@@ -236,16 +344,25 @@
 		// ====================================================================================
 
 		function AppRootView(state) {
-			return tree("div", {}, [
-				tree("h1", {}, ["Argot"]),
-				tree("p", {}, [
-					tree("button", { onclick: () => (state.view = "home"), }, ["Home"]),
+			return tree("div", [
+				tree("h1", ["Argot"]),
+				tree("p", [
+					tree("button", [
+						prop("onclick", () => (state.view = "home")),
+						"Home",
+					]),
 					"\u{202F}",
-					tree("button", { onclick: () => (state.view = "about"), }, ["About"]),
+					tree("button", [
+						handler("click", () => (state.view = "about")),
+						"About",
+					]),
 					"\u{202F}",
-					tree("button", { onclick: () => (state.view = "submit"), }, ["Submit"]),
+					tree("button", [
+						handler("click", () => (state.view = "submit")),
+						"Submit",
+					]),
 				]),
-				tree("hr", {}, []),
+				tree("hr", []),
 				{
 					"home": HomeView,
 					"about": AboutView,
@@ -256,42 +373,40 @@
 		}
 
 		function HomeView(state) {
-			return tree("div", {}, []);
+			return tree("div", []);
 		}
 
 		function AboutView(state) {
-			return tree("div", {}, [
-				tree("p", {}, ["Welcome to Argot! This is a super duper serious link sharing website for intellectuals! Nya~"]),
-				tree("img", { src: "https://pbs.twimg.com/media/DT_YODIWkAEKH8X.jpg" }, []),
-				tree("p", {}, ["Ferris The Crab~ This is so nya-tastic!!111"]),
+			return tree("div", [
+				tree("p", ["Welcome to Argot! This is a super duper serious link sharing website for intellectuals! Nya~"]),
+				tree("img", [prop("src", "https://pbs.twimg.com/media/DT_YODIWkAEKH8X.jpg")]),
+				tree("p", ["Ferris The Crab~ This is so nya-tastic!!111"]),
 			]);
 		}
 
 		function SubmitView(state) {
-			return tree("div", {
-				[KEY]: "submit_view",
-				[MOUNT_HANDLER]() {
-					const name_field = this.querySelector("#name_field");
-					const url_field = this.querySelector("#url_field");
-
-					this.querySelector("#submit_button").addEventListener("click", () => {
-						console.log(name_field.value);
-						console.log(url_field.value);
-					});
-				},
-			}, [
-				tree("h2", {}, ["Submit your link here!"]),
-				tree("p", {}, [
+			return tree("div", "submit_view", [
+				effect("whee", (target) => {
+					console.log("Mounted", target);
+					return target => console.log("Unmounted", target);
+				}),
+				tree("h2", ["Submit your link here!"]),
+				tree("p", [
 					"Name:",
 					"\u{202F}",
-					tree("input", { id: "name_field" }, []),
+					tree("input", []),
 				]),
-				tree("p", {}, [
+				tree("p", [
 					"URL:",
 					"\u{202F}",
-					tree("input", { id: "url_field" }, []),
+					tree("input", []),
 				]),
-				tree("button", { id: "submit_button" }, ["Submit"]),
+				tree("button", [
+					handler("click", () => {
+						console.log("Submitting the stuff!");
+					}),
+					"Submit",
+				]),
 			]);
 		}
 
