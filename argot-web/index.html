@@ -20,6 +20,7 @@
 		// ====================================================================================
 
 		// Internals
+		const DOM_LAST_STATES = new WeakMap();
 		const DOM_EFFECTS = new WeakMap();
 		const SENTINEL_MOUNT = Symbol("SENTINEL_MOUNT");
 		const SENTINEL_UNMOUNT = Symbol("SENTINEL_UNMOUNT");
@@ -117,6 +118,13 @@
 		 */
 		function render(dom/*: Element*/, tree/*: VirtualElement */) /*: void */ {
 			console.assert(tree instanceof VirtualElement);
+
+			// Skip rendering if this element is already supposed to look like the provided virtual
+			// DOM.
+			if (DOM_LAST_STATES.get(dom) === tree) {
+				return;
+			}
+			DOM_LAST_STATES.set(dom, tree);
 
 			// The root `tagName` must never change. Note that, when recursing, we always check the
 			// tag name so this indeed only check for root changes.
@@ -338,6 +346,28 @@
 			}
 		}
 
+		class RefSetEffect extends VirtualEffect {
+			constructor(ref) {
+				super();
+				this.key = "ref_setter";
+				this.ref = ref;
+			}
+
+			mount(target) {
+				this.ref.$ = target;
+			}
+
+			unmount(target) {
+				this.ref.$ = null;
+			}
+		}
+
+		class Ref {
+			constructor(value) {
+				this.$ = value;
+			}
+		}
+
 		function effect(key, mount_handler) {
 			return new ClosureVirtualEffect(`effect_${key}`, mount_handler);
 		}
@@ -354,14 +384,66 @@
 			return new StyleVirtualEffect(`style_${key}`, key, value);
 		}
 
+		function setRef(ref) {
+			return new RefSetEffect(ref);
+		}
+
 		// ====================================================================================
-		// Our custom UI framework requires a separation between model and view+controller so
-		// we define our model here.
+		// To make things efficient, we'll also need a memoization system.
 		// ====================================================================================
 
-		class AppRoot {
+		// Internal
+		const DEPENDENTS = Symbol("DEPENDENTS");
+		const VIEW_CACHE = Symbol("VIEW_CACHE");
+		const EMPTY_CACHE_SENTINEL = Symbol("EMPTY_CACHE_SENTINEL");
+
+		// Public
+		class Component {
 			constructor() {
-				this.view = "home";
+				Component.RENDER_SCOPE = null;
+
+				this[DEPENDENTS] = new Set();
+				this[VIEW_CACHE] = EMPTY_CACHE_SENTINEL;
+			}
+
+			dirty() {
+				for (const dependent of this[DEPENDENTS]) {
+					dependent.dirty();
+				}
+
+				this[VIEW_CACHE] = EMPTY_CACHE_SENTINEL;
+				this[DEPENDENTS].clear();
+			}
+
+			subscribe() {
+				if (Component.RENDER_SCOPE !== null) {
+					this[DEPENDENTS].add(Component.RENDER_SCOPE);
+				}
+
+				return this;
+			}
+
+			renderImmediately() {
+				throw "this component cannot be rendered";
+			}
+
+			renderCached() {
+				// Ensure that people using this view in their view are invalidated when we invalidate
+				// ourselves.
+				this.subscribe();
+
+				// Recompute a cache if one is not present.
+				if (this[VIEW_CACHE] === EMPTY_CACHE_SENTINEL) {
+					const parent_scope = Component.RENDER_SCOPE;
+					try {
+						Component.RENDER_SCOPE = this;
+						this[VIEW_CACHE] = this.renderImmediately();
+					} finally {
+						Component.RENDER_SCOPE = parent_scope;
+					}
+				}
+
+				return this[VIEW_CACHE];
 			}
 		}
 
@@ -369,88 +451,115 @@
 		// Now, we can define the application's view components.
 		// ====================================================================================
 
-		function AppRootView(state) {
-			return tree("div", [
-				effect("configure_webpage", () => {
-					document.bgColor = "pink";
-				}),
-				tree("h1", ["Argot"]),
-				tree("p", [
-					tree("button", [
-						prop("onclick", () => (state.view = "home")),
-						style("color", state.view === "home" ? "red" : "inherit"),
-						"Home",
+		class AppRoot extends Component {
+			constructor() {
+				super();
+				this.view = "home";
+				this.view_comp = new HomePage();
+			}
+
+			setView(id) {
+				this.view = id;
+				this.view_comp = new {
+					"home": HomePage,
+					"about": AboutPage,
+					"submit": SubmitPage,
+				}[id]();
+				this.dirty();
+			}
+
+			renderImmediately() {
+				return tree("div", [
+					effect("configure_webpage", () => {
+						document.bgColor = "pink";
+					}),
+					tree("h1", ["Argot"]),
+					tree("p", [
+						tree("button", [
+							prop("onclick", () => this.setView("home")),
+							style("color", this.view === "home" ? "red" : "inherit"),
+							"Home",
+						]),
+						"\u{202F}",
+						tree("button", [
+							handler("click", () => this.setView("about")),
+							style("color", this.view === "about" ? "red" : "inherit"),
+							"About",
+						]),
+						"\u{202F}",
+						tree("button", [
+							handler("click", () => this.setView("submit")),
+							style("color", this.view === "submit" ? "red" : "inherit"),
+							"Submit",
+						]),
 					]),
-					"\u{202F}",
-					tree("button", [
-						handler("click", () => (state.view = "about")),
-						style("color", state.view === "about" ? "red" : "inherit"),
-						"About",
+					tree("hr", []),
+					this.view_comp.renderCached(),
+				]);
+			}
+		}
+
+		class HomePage extends Component {
+			renderImmediately() {
+				return tree("div", []);
+			}
+		}
+
+		class AboutPage extends Component {
+			renderImmediately() {
+				return tree("div", [
+					tree("p", ["Welcome to Argot! This is a super duper serious link sharing website for intellectuals! Nya~"]),
+					tree("img", [prop("src", "https://pbs.twimg.com/media/DT_YODIWkAEKH8X.jpg")]),
+					tree("p", ["Ferris The Crab~ This is so nya-tastic!!111"]),
+				]);
+			}
+		}
+
+		class SubmitPage extends Component {
+			constructor() {
+				super();
+				this.name_field = new Ref();
+				this.url_field = new Ref();
+			}
+
+			renderImmediately() {
+				return tree("div", "submit_view", [
+					effect("whee", (target) => {
+						console.log("Mounted", target);
+						return target => console.log("Unmounted", target);
+					}),
+					tree("h2", ["Submit your link here!"]),
+					tree("p", [
+						"Name:",
+						"\u{202F}",
+						tree("input", [setRef(this.name_field)]),
 					]),
-					"\u{202F}",
+					tree("p", [
+						"URL:",
+						"\u{202F}",
+						tree("input", [setRef(this.url_field)]),
+					]),
 					tree("button", [
-						handler("click", () => (state.view = "submit")),
-						style("color", state.view === "submit" ? "red" : "inherit"),
+						handler("click", target => {
+							console.log("Submitting the stuff!");
+							console.log("Name:", this.name_field.$.value);
+							console.log("URL:", this.url_field.$.value);
+						}),
 						"Submit",
 					]),
-				]),
-				tree("hr", []),
-				{
-					"home": HomeView,
-					"about": AboutView,
-					"submit": SubmitView,
-				}
-				[state.view](state),
-			]);
-		}
-
-		function HomeView(state) {
-			return tree("div", []);
-		}
-
-		function AboutView(state) {
-			return tree("div", [
-				tree("p", ["Welcome to Argot! This is a super duper serious link sharing website for intellectuals! Nya~"]),
-				tree("img", [prop("src", "https://pbs.twimg.com/media/DT_YODIWkAEKH8X.jpg")]),
-				tree("p", ["Ferris The Crab~ This is so nya-tastic!!111"]),
-			]);
-		}
-
-		function SubmitView(state) {
-			return tree("div", "submit_view", [
-				effect("whee", (target) => {
-					console.log("Mounted", target);
-					return target => console.log("Unmounted", target);
-				}),
-				tree("h2", ["Submit your link here!"]),
-				tree("p", [
-					"Name:",
-					"\u{202F}",
-					tree("input", []),
-				]),
-				tree("p", [
-					"URL:",
-					"\u{202F}",
-					tree("input", []),
-				]),
-				tree("button", [
-					handler("click", () => {
-						console.log("Submitting the stuff!");
-					}),
-					"Submit",
-				]),
-			]);
+				]);
+			}
 		}
 
 		// ====================================================================================
 		// Finally, let's start up the application!
 		// ====================================================================================
 
-		const APP_STATE = new AppRoot();
+		const ROOT = new AppRoot();
 
 		function tick() {
 			requestAnimationFrame(tick);
-			render(app_container, AppRootView(APP_STATE));
+			render(app_container, ROOT.renderCached());
 		}
 
 		requestAnimationFrame(tick);
