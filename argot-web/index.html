@@ -22,6 +22,8 @@
 		// Internals
 		const DOM_LAST_TREE = Symbol("DOM_LAST_TREE");
 		const DOM_LAST_PROP_SET = Symbol("DOM_LAST_PROP_SET");
+		const MOUNT_HANDLER = Symbol("MOUNT_HANDLER");
+		const UNMOUNT_HANDLER = Symbol("UNMOUNT_HANDLER");
 
 		class NodeChildBuilder {
 			constructor() {
@@ -66,6 +68,32 @@
 		}
 
 		/**
+		 * Applies the specified property set to the target node.
+		 */
+		function renderProps(target, attrs) {
+			// Remove attributes which were set in the previous iteration
+			// and no longer have a setting.
+			for (const old of target[DOM_LAST_PROP_SET] ?? []) {
+				if (!(old in attrs))
+					delete target[old];
+			}
+
+			// For every specified attribute...
+			const new_prop_list = [
+				...Object.keys(attrs),
+				...Object.getOwnPropertySymbols(attrs),
+			];
+
+			// Set it...
+			for (const key of new_prop_list) {
+				target[key] = attrs[key];
+			}
+
+			// And remember that last set of manually written attributes.
+			target[DOM_LAST_PROP_SET] = new_prop_list;
+		}
+
+		/**
 		 * Applies the specified virtual DOM `tree` to the DOM target.
 		 */
 		function render(dom/*: Element*/, tree/*: Tree */) /*: void */ {
@@ -77,38 +105,24 @@
 			// tag name so this indeed only check for root changes.
 			console.assert(dom.tagName === tree.tag.toUpperCase());
 
+			// Collect elements which need mounting an unmounting
+			const needs_mount_call = new Set();
+			const needs_unmount_call = new Set();
+
 			// Collect keyed DOM elements and remove them from their parent.
 			const key_map = new Map();
 			for (const child of dom.children) {  // Only `Element`s can have keys.
 				if (child[KEY] !== undefined) {
 					key_map.set(child[KEY], child);
+
+					if (child[UNMOUNT_HANDLER] !== undefined) {
+						needs_unmount_call.add(child);
+					}
 				}
 			}
 
 			// Reconcile this element's attributes.
-			// TODO: This algorithm doesn't even really handle styles and stuff.
-			{
-				// Remove attributes which were set in the previous iteration
-				// and no longer have a setting.
-				for (const old of dom[DOM_LAST_PROP_SET] ?? []) {
-					if (!(old in tree.attrs))
-						delete dom[old];
-				}
-
-				// For every specified attribute...
-				const new_prop_list = [
-					...Object.keys(tree.attrs),
-					...Object.getOwnPropertySymbols(tree.attrs),
-				];
-
-				// Set it...
-				for (const key of new_prop_list) {
-					dom[key] = tree.attrs[key];
-				}
-
-				// And remember that last set of manually written attributes.
-				dom[DOM_LAST_PROP_SET] = new_prop_list;
-			}
+			renderProps(dom, tree.attrs);
 
 			// Reconcile the DOM children using our discount version of React's heuristic algorithm.
 
@@ -130,13 +144,24 @@
 					// work is required.
 					if (element === undefined || element.tagName !== tree_curr.tag.toUpperCase()) {
 						element = document.createElement(tree_curr.tag);
+
+						// Now, render it.
+						render(element, tree_curr);
+
+						// Since this is new, we may need to mount it.
+						if (element[MOUNT_HANDLER] !== undefined) {
+							needs_mount_call.add(element);
+						}
 					} else {
 						// Otherwise, remove it from the map to prevent it from being used later.
 						key_map.delete(tree_curr.attrs[KEY]);
-					}
 
-					// Now, render it.
-					render(element, tree_curr);
+						// Also, since it's been used, we no longer need to unmount it.
+						needs_unmount_call.delete(element);
+
+						// Now, render it.
+						render(element, tree_curr);
+					}
 
 					// Push it to the builder.
 					builder.push(element);
@@ -149,8 +174,9 @@
 
 				// We skip over keyed elements when doing this determination because keyed elements and regular elements
 				// are merged in separately.
-				while (dom_read_curr !== undefined && dom_read_curr[KEY] !== undefined)
+				while (dom_read_curr !== undefined && dom_read_curr[KEY] !== undefined) {
 					dom_read_curr = dom.childNodes[++dom_read_cursor];
+				}
 
 				// Attempt to determine which new node should be at this place.
 				if (typeof tree_curr === "string") {
@@ -182,6 +208,16 @@
 
 			// Now, we just have to apply the builder's layout to the element.
 			builder.apply(dom);
+
+			// Now process mounts.
+			// TODO: Maybe run this after the entire tree has been reconciled?
+			for (const child of needs_unmount_call) {
+				child[UNMOUNT_HANDLER].call(child);
+			}
+
+			for (const child of needs_mount_call) {
+				child[MOUNT_HANDLER].call(child);
+			}
 		}
 
 		// ====================================================================================
@@ -232,18 +268,30 @@
 		}
 
 		function SubmitView(state) {
-			return tree("div", {}, [
+			return tree("div", {
+				[KEY]: "submit_view",
+				[MOUNT_HANDLER]() {
+					const name_field = this.querySelector("#name_field");
+					const url_field = this.querySelector("#url_field");
+
+					this.querySelector("#submit_button").addEventListener("click", () => {
+						console.log(name_field.value);
+						console.log(url_field.value);
+					});
+				},
+			}, [
 				tree("h2", {}, ["Submit your link here!"]),
 				tree("p", {}, [
 					"Name:",
 					"\u{202F}",
-					tree("input", {}, []),
+					tree("input", { id: "name_field" }, []),
 				]),
 				tree("p", {}, [
 					"URL:",
 					"\u{202F}",
-					tree("input", {}, []),
+					tree("input", { id: "url_field" }, []),
 				]),
+				tree("button", { id: "submit_button" }, ["Submit"]),
 			]);
 		}
 
