@@ -480,6 +480,31 @@
 			}
 		}
 
+		class DerivedComponents {
+			constructor() {
+				this.persistent_cache = new Map();
+				this.to_delete = new Set();
+			}
+
+			begin() {
+				for (const to_delete of this.to_delete) {
+					this.persistent_cache.delete(to_delete);
+				}
+				this.to_delete = new Set(this.persistent_cache.keys());
+			}
+
+			fetch(key, ctor) {
+				this.to_delete.delete(key);
+				let value = this.persistent_cache.get(key);
+				if (value === undefined) {
+					value = ctor();
+					this.persistent_cache.set(key, value);
+				}
+
+				return value;
+			}
+		}
+
 		// ====================================================================================
 		// Now, we can define the application's view components.
 		// ====================================================================================
@@ -489,34 +514,10 @@
 			constructor() {
 				super();
 				this.view = "home";
-				this.view_comp = new HomePage();
-				this.saved_post = new PostState("", "");
+				this.view_comp = new HomePage(this);
 
-				// Courtesy: https://github.com/Gankra/cargo-mommy/blob/0ec17361d8b0573d0155984403e576b788abeb60/responses.json
-				this.motd = [
-					"*pets your head*",
-					"*gives you scritches*",
-					"you're such a smart cookie~",
-					"that's a good girl~",
-					"mommy thinks her little girl earned a big hug~",
-					"good girl~\nmommy's so proud of you~",
-					"aww, what a good girl~\nmommy knew you could do it~",
-					"you did it~!",
-					"mommy loves you~",
-					"*gives you a sticker*",
-					"*boops your nose*",
-					"*wraps you in a big hug*",
-					"well done~!\nmommy is so happy for you~",
-					"what a good girl you are~",
-					"that's mommy's clever little girl~",
-					"you're doing so well~!",
-					"you're making mommy so happy~",
-					"mommy loves her cute little girl~",
-					"What you have set in motion today will be remembered for aeons to come!",
-					"Mommy will see to it that her little girl's name is feared~",
-					"Mommy is proud of the evil seed her girl has planted into this accursed world",
-				];
-				this.motd = this.motd[Math.floor(Math.random() * this.motd.length)];
+				this.saved_post = new PostState("", "");
+				this.fetched_posts = new PostListState();
 			}
 
 			setView(id) {
@@ -535,7 +536,6 @@
 						document.bgColor = "pink";
 					}),
 					tree("h1", ["Argot"]),
-					tree("marquee", [this.motd]),
 					tree("p", [
 						tree("button", [
 							prop("onclick", () => this.setView("home")),
@@ -562,13 +562,20 @@
 		}
 
 		class HomePage extends Component {
-			constructor() {
+			constructor(app) {
 				super();
-				this.posts = [];
+				this.app = app;
+				this.posts = new DerivedComponents();
 			}
 
 			renderImmediately() {
-				return tree("div", []);
+				this.posts.begin();
+
+				const post_list = this.app.fetched_posts.subscribe().posts;
+
+				return tree("div", [
+					post_list.map(state => this.posts.fetch(state, () => new PostPreviewView(state)).renderCached()),
+				]);
 			}
 		}
 
@@ -589,7 +596,7 @@
 			}
 
 			renderImmediately() {
-				const saved_post = this.app.subscribe().saved_post.subscribe();
+				const saved_post = this.app.saved_post.subscribe();
 
 				return tree("div", "submit_page", [
 					tree("h2", ["Submit your link here!"]),
@@ -624,11 +631,14 @@
 							console.log("Submitting the stuff!");
 							console.log("Name:", saved_post.title);
 							console.log("URL:", saved_post.url);
+
+							this.app.fetched_posts.posts.push(new PostState(saved_post.title, saved_post.url));
+							this.app.fetched_posts.dirty();
 						}),
 						"Submit",
 					]),
 					tree("hr", []),
-					RenderPostPreview(
+					renderPostPreview(
 						saved_post.title,
 						"You",
 						"Now",
@@ -640,6 +650,13 @@
 		}
 
 		// State
+		class PostListState extends Component {
+			constructor() {
+				super();
+				this.posts = [new PostState("whee", "woo")];
+			}
+		}
+
 		class PostState extends Component {
 			constructor(title, url) {
 				super();
@@ -652,7 +669,19 @@
 		}
 
 		// Home feed
-		function RenderPostPreview(title, author, time, url, id) {
+		class PostPreviewView extends Component {
+			constructor(state) {
+				super();
+				this.state = state;
+			}
+
+			renderImmediately() {
+				const { title, author, time, url, id } = this.state.subscribe();
+				return renderPostPreview(title, author, time, url, id);
+			}
+		}
+
+		function renderPostPreview(title, author, time, url, id) {
 			return tree("div", `post_${id}`, [
 				style("border", "1px solid"),
 				style("padding", "10px"),
