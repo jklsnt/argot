@@ -8,7 +8,7 @@ from flask_login import UserMixin
 
 def date_str(dt):
     """Scuffed func to convert datetime to relative time in natural language.
-    E.g. dt -> '3 hours ago' 
+    E.g. dt -> '3 hours ago'
     It's 2:27 AM as I write this so cut me some slack.
     """
     now = datetime.now()
@@ -24,7 +24,7 @@ def date_str(dt):
     if diff.seconds >= 0:
         return f"{diff.seconds} second{'' if diff.seconds == 1 else 's'} ago"
     return "just now" # you don't need microsecond precision.
-               
+
 db = SqliteDatabase('./argot.db', pragmas={
     'journal_mode': 'wal',
     'cache_size': -1 * 64000,  # 64MB
@@ -36,7 +36,7 @@ class User(UserMixin, Model):
     class Meta:
         database = db
         table_name = "users"
-    
+
     id = AutoField(primary_key=True)
     nick = TextField()
     bio = TextField(null=True)
@@ -49,15 +49,15 @@ class User(UserMixin, Model):
         salt = ''.join(secrets.choice(alphabet) for i in range(8))
 
         dk = hashlib.scrypt(password.encode(), salt=salt.encode(), n=16384, r=8, p=1)
-        
+
         return User.create(
             nick=nick,
             hash=dk.hex(),
             salt=salt,
             email=email,
             bio=bio
-        )    
-    
+        )
+
     def to_dict(self):
         return {
             "nick": self.nick,
@@ -87,31 +87,18 @@ class Post(Model):
         )
 
     def tag_query(tag_names, intersection=False):
-        print(tag_names)
         tags = tuple([str(tag) for tag in tag_names])
 
-        # TODO Obviously there's SQL injection issues here.
-        query_str = f"""
-            SELECT b.*
-            FROM tagmaps bt, posts b, tags t
-            WHERE bt.tag_id = t.id
-            AND (t.name IN {tags})
-            AND b.id = bt.post_id
-            GROUP BY b.id            
-        """
+        posts = Post.select().join(TagMap).join(Tag).where(
+            (TagMap.tag_id == Tag.id) &
+            (Tag.name << tags) &
+            (Post.id == TagMap.post_id)
+        ).group_by(Post.id)
         if intersection:
-            query_str += f"\nHAVING COUNT ( b.id )={len(tags)}"
+            posts = posts.having(fn.Count(Post.id) == len(tags))
 
-        print(query_str)
-            
-        out = []
-        cur = db.execute_sql(query_str)
-        for row in cur.fetchall():
-            # FIXME this feels abysmal ngl
-            post = Post.select().where(Post.id == row[0]).get()
-            out.append(post.to_dict())
-        return out
-    
+        return [p.to_dict() for p in posts]
+
     def to_dict(self):
         return {
             "id": self.id,
@@ -123,16 +110,6 @@ class Post(Model):
             "tags": [t.tag_id.name for t in self.tags]
         }
 
-    # def row_to_dict(tup):
-    #     return {
-    #         "id": tup[0],
-    #         "time": date_str(datetime.fromisoformat(tup[1])),
-    #         "title": tup[2],
-    #         "link": tup[3],
-    #         "author": User.select().where(User.id == tup[4]).get().nick,
-    #         "content": tup[5]
-    #     }
-
 class Tag(Model):
     id = AutoField(primary_key=True)
     name = TextField()
@@ -140,7 +117,7 @@ class Tag(Model):
     class Meta:
         database = db
         table_name = "tags"
-        
+
 class TagMap(Model):
     id = AutoField(primary_key=True)
     post_id = ForeignKeyField(Post, backref="tags")
@@ -161,7 +138,7 @@ class Comment(Model):
     class Meta:
         database = db
         table_name = "comments"
-        
+
     def new(post, author, content, parent=None, time=datetime.now()):
         return Comment.create(
             post_id=post,
@@ -170,7 +147,7 @@ class Comment(Model):
             parent_id=parent,
             time=time,
         )
-        
+
     def to_mini_dict(self):
         return {
             "id": self.id,
