@@ -86,6 +86,32 @@ class Post(Model):
             content=content,
         )
 
+    def tag_query(tag_names, intersection=False):
+        print(tag_names)
+        tags = tuple([str(tag) for tag in tag_names])
+
+        # TODO Obviously there's SQL injection issues here.
+        query_str = f"""
+            SELECT b.*
+            FROM tagmaps bt, posts b, tags t
+            WHERE bt.tag_id = t.id
+            AND (t.name IN {tags})
+            AND b.id = bt.post_id
+            GROUP BY b.id            
+        """
+        if intersection:
+            query_str += f"\nHAVING COUNT ( b.id )={len(tags)}"
+
+        print(query_str)
+            
+        out = []
+        cur = db.execute_sql(query_str)
+        for row in cur.fetchall():
+            # FIXME this feels abysmal ngl
+            post = Post.select().where(Post.id == row[0]).get()
+            out.append(post.to_dict())
+        return out
+    
     def to_dict(self):
         return {
             "id": self.id,
@@ -94,8 +120,35 @@ class Post(Model):
             "author": self.author_id.nick,
             "time": date_str(self.time),
             "content": self.content,
+            "tags": [t.tag_id.name for t in self.tags]
         }
 
+    # def row_to_dict(tup):
+    #     return {
+    #         "id": tup[0],
+    #         "time": date_str(datetime.fromisoformat(tup[1])),
+    #         "title": tup[2],
+    #         "link": tup[3],
+    #         "author": User.select().where(User.id == tup[4]).get().nick,
+    #         "content": tup[5]
+    #     }
+
+class Tag(Model):
+    id = AutoField(primary_key=True)
+    name = TextField()
+
+    class Meta:
+        database = db
+        table_name = "tags"
+        
+class TagMap(Model):
+    id = AutoField(primary_key=True)
+    post_id = ForeignKeyField(Post, backref="tags")
+    tag_id = ForeignKeyField(Tag, backref="posts")
+
+    class Meta:
+        database = db
+        table_name = "tagmaps"
 
 class Comment(Model):
     id = AutoField(primary_key=True)

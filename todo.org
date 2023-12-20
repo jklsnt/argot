@@ -7,6 +7,8 @@
 * medium term
 - tagging support
 - searching
+- rebase out riley's commits
+
 
 * long term
 - other frontends
