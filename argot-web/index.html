@@ -427,6 +427,7 @@
 		// Internal
 		const DEPENDENTS = Symbol("DEPENDENTS");
 		const VIEW_CACHE = Symbol("VIEW_CACHE");
+		const DERIVED_MAP = Symbol("DERIVED_MAP");
 		const EMPTY_CACHE_SENTINEL = Symbol("EMPTY_CACHE_SENTINEL");
 
 		// Public
@@ -436,6 +437,17 @@
 
 				this[DEPENDENTS] = new Set();
 				this[VIEW_CACHE] = EMPTY_CACHE_SENTINEL;
+				this[DERIVED_MAP] = new Map();
+			}
+
+			renderChild(namespace, key, ctor) {
+				let store = this[DERIVED_MAP].get(namespace);
+				if (store === undefined) {
+					store = new DerivedComponents();
+					this[DERIVED_MAP].set(namespace, store);
+				}
+
+				return store.fetch(key, ctor).render();
 			}
 
 			dirty() {
@@ -456,21 +468,27 @@
 				return this;
 			}
 
-			renderImmediately() {
+			doRender() {
 				throw "this component cannot be rendered";
 			}
 
-			renderCached() {
+			render() {
 				// Ensure that people using this view in their view are invalidated when we invalidate
 				// ourselves.
 				this.subscribe();
 
 				// Recompute a cache if one is not present.
 				if (this[VIEW_CACHE] === EMPTY_CACHE_SENTINEL) {
+					// Reset the derivation stores
+					for (const store of this[DERIVED_MAP].values()) {
+						store.begin();
+					}
+
+					// Render it
 					const parent_scope = Component.RENDER_SCOPE;
 					try {
 						Component.RENDER_SCOPE = this;
-						this[VIEW_CACHE] = this.renderImmediately();
+						this[VIEW_CACHE] = this.doRender();
 					} finally {
 						Component.RENDER_SCOPE = parent_scope;
 					}
@@ -506,7 +524,29 @@
 		}
 
 		// ====================================================================================
-		// Now, we can define the application's view components.
+		// Now, we can define the application's model.
+		// ====================================================================================
+
+		class PostListState extends Component {
+			constructor() {
+				super();
+				this.posts = [new PostState("Look at this cool website!", "http://www.example.com")];
+			}
+		}
+
+		class PostState extends Component {
+			constructor(title, url) {
+				super();
+				this.title = title;
+				this.author = "[not specified]";
+				this.time = "[not specified]";
+				this.url = url;
+				this.id = "[not specified]";
+			}
+		}
+
+		// ====================================================================================
+		// ...as well as the app's view components.
 		// ====================================================================================
 
 		// Pages
@@ -530,7 +570,7 @@
 				this.dirty();
 			}
 
-			renderImmediately() {
+			doRender() {
 				return tree("div", [
 					effect("configure_webpage", () => {
 						document.bgColor = "pink";
@@ -556,7 +596,7 @@
 						]),
 					]),
 					tree("hr", []),
-					this.view_comp.renderCached(),
+					this.view_comp.render(),
 				]);
 			}
 		}
@@ -565,22 +605,23 @@
 			constructor(app) {
 				super();
 				this.app = app;
-				this.posts = new DerivedComponents();
 			}
 
-			renderImmediately() {
-				this.posts.begin();
-
+			doRender() {
 				const post_list = this.app.fetched_posts.subscribe().posts;
 
 				return tree("div", [
-					post_list.map(state => this.posts.fetch(state, () => new PostPreviewView(state)).renderCached()),
+					post_list.map(state => this.renderChild(
+						PostPreviewView,
+						state.id,
+						() => new PostPreviewView(state),
+					)),
 				]);
 			}
 		}
 
 		class AboutPage extends Component {
-			renderImmediately() {
+			doRender() {
 				return tree("div", [
 					tree("p", ["Welcome to Argot! This is a super duper serious link sharing website for intellectuals! Nya~"]),
 					tree("img", [prop("src", "https://pbs.twimg.com/media/DT_YODIWkAEKH8X.jpg")]),
@@ -595,7 +636,7 @@
 				this.app = app;
 			}
 
-			renderImmediately() {
+			doRender() {
 				const saved_post = this.app.saved_post.subscribe();
 
 				return tree("div", "submit_page", [
@@ -632,7 +673,10 @@
 							console.log("Name:", saved_post.title);
 							console.log("URL:", saved_post.url);
 
-							this.app.fetched_posts.posts.push(new PostState(saved_post.title, saved_post.url));
+							const post = new PostState(saved_post.title, saved_post.url);
+							post.id = `local_post_${this.app.fetched_posts.posts.length}`;
+
+							this.app.fetched_posts.posts.push(post);
 							this.app.fetched_posts.dirty();
 						}),
 						"Submit",
@@ -649,25 +693,6 @@
 			}
 		}
 
-		// State
-		class PostListState extends Component {
-			constructor() {
-				super();
-				this.posts = [new PostState("whee", "woo")];
-			}
-		}
-
-		class PostState extends Component {
-			constructor(title, url) {
-				super();
-				this.title = title;
-				this.author = "[not specified]";
-				this.time = "[not specified]";
-				this.url = url;
-				this.id = "[not specified]";
-			}
-		}
-
 		// Home feed
 		class PostPreviewView extends Component {
 			constructor(state) {
@@ -675,7 +700,7 @@
 				this.state = state;
 			}
 
-			renderImmediately() {
+			doRender() {
 				const { title, author, time, url, id } = this.state.subscribe();
 				return renderPostPreview(title, author, time, url, id);
 			}
@@ -703,7 +728,7 @@
 
 		function tick() {
 			requestAnimationFrame(tick);
-			render(app_container, ROOT.renderCached());
+			render(app_container, ROOT.render());
 		}
 
 		requestAnimationFrame(tick);
