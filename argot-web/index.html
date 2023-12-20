@@ -256,6 +256,8 @@
 				derender(child);
 			}
 
+			// BUG: An order needs to be defined for these such that a) unmount handlers all run
+			//  before mount handlers and b) users can predict the order of these handlers.
 			for (const [effect_key, effect] of effect_map.entries()) {
 				if (effect.new_state === SENTINEL_MOUNT) {
 					effect.mount(dom);
@@ -437,12 +439,13 @@
 			}
 
 			dirty() {
-				for (const dependent of this[DEPENDENTS]) {
+				const old_deps = this[DEPENDENTS];
+				this[DEPENDENTS] = new Set();
+				this[VIEW_CACHE] = EMPTY_CACHE_SENTINEL;
+
+				for (const dependent of old_deps) {
 					dependent.dirty();
 				}
-
-				this[VIEW_CACHE] = EMPTY_CACHE_SENTINEL;
-				this[DEPENDENTS].clear();
 			}
 
 			subscribe() {
@@ -481,11 +484,39 @@
 		// Now, we can define the application's view components.
 		// ====================================================================================
 
+		// Pages
 		class AppRoot extends Component {
 			constructor() {
 				super();
 				this.view = "home";
 				this.view_comp = new HomePage();
+				this.saved_post = new PostState("", "");
+
+				// Courtesy: https://github.com/Gankra/cargo-mommy/blob/0ec17361d8b0573d0155984403e576b788abeb60/responses.json
+				this.motd = [
+					"*pets your head*",
+					"*gives you scritches*",
+					"you're such a smart cookie~",
+					"that's a good girl~",
+					"mommy thinks her little girl earned a big hug~",
+					"good girl~\nmommy's so proud of you~",
+					"aww, what a good girl~\nmommy knew you could do it~",
+					"you did it~!",
+					"mommy loves you~",
+					"*gives you a sticker*",
+					"*boops your nose*",
+					"*wraps you in a big hug*",
+					"well done~!\nmommy is so happy for you~",
+					"what a good girl you are~",
+					"that's mommy's clever little girl~",
+					"you're doing so well~!",
+					"you're making mommy so happy~",
+					"mommy loves her cute little girl~",
+					"What you have set in motion today will be remembered for aeons to come!",
+					"Mommy will see to it that her little girl's name is feared~",
+					"Mommy is proud of the evil seed her girl has planted into this accursed world",
+				];
+				this.motd = this.motd[Math.floor(Math.random() * this.motd.length)];
 			}
 
 			setView(id) {
@@ -494,7 +525,7 @@
 					"home": HomePage,
 					"about": AboutPage,
 					"submit": SubmitPage,
-				}[id]();
+				}[id](this);
 				this.dirty();
 			}
 
@@ -504,6 +535,7 @@
 						document.bgColor = "pink";
 					}),
 					tree("h1", ["Argot"]),
+					tree("marquee", [this.motd]),
 					tree("p", [
 						tree("button", [
 							prop("onclick", () => this.setView("home")),
@@ -530,6 +562,11 @@
 		}
 
 		class HomePage extends Component {
+			constructor() {
+				super();
+				this.posts = [];
+			}
+
 			renderImmediately() {
 				return tree("div", []);
 			}
@@ -546,39 +583,87 @@
 		}
 
 		class SubmitPage extends Component {
-			constructor() {
+			constructor(app) {
 				super();
-				this.name_field = new Ref();
-				this.url_field = new Ref();
+				this.app = app;
 			}
 
 			renderImmediately() {
+				const saved_post = this.app.subscribe().saved_post.subscribe();
+
 				return tree("div", "submit_page", [
-					effect("whee", (target) => {
-						console.log("Mounted", target);
-						return target => console.log("Unmounted", target);
-					}),
 					tree("h2", ["Submit your link here!"]),
 					tree("p", [
-						"Name:",
+						"Title:",
 						"\u{202F}",
-						tree("input", [setRef(this.name_field)]),
+						tree("input", [
+							handler("input", (e) => {
+								saved_post.title = e.target.value;
+								saved_post.dirty();
+							}),
+							effect("init", target => {
+								target.value = saved_post.title;
+							}),
+						]),
 					]),
 					tree("p", [
 						"URL:",
 						"\u{202F}",
-						tree("input", [setRef(this.url_field)]),
+						tree("input", [
+							handler("input", (e) => {
+								saved_post.url = e.target.value;
+								saved_post.dirty();
+							}),
+							effect("init", target => {
+								target.value = saved_post.url;
+							}),
+						]),
 					]),
 					tree("button", [
 						handler("click", target => {
 							console.log("Submitting the stuff!");
-							console.log("Name:", this.name_field.$.value);
-							console.log("URL:", this.url_field.$.value);
+							console.log("Name:", saved_post.title);
+							console.log("URL:", saved_post.url);
 						}),
 						"Submit",
 					]),
+					tree("hr", []),
+					RenderPostPreview(
+						saved_post.title,
+						"You",
+						"Now",
+						saved_post.url,
+						"1",
+					),
 				]);
 			}
+		}
+
+		// State
+		class PostState extends Component {
+			constructor(title, url) {
+				super();
+				this.title = title;
+				this.author = "[not specified]";
+				this.time = "[not specified]";
+				this.url = url;
+				this.id = "[not specified]";
+			}
+		}
+
+		// Home feed
+		function RenderPostPreview(title, author, time, url, id) {
+			return tree("div", `post_${id}`, [
+				style("border", "1px solid"),
+				style("padding", "10px"),
+				tree("h2", [title.length > 0 ? title : "No title specified!"]),
+				tree("p", ["By ", tree("strong", [author]), ", posted ", tree("strong", [time])]),
+				tree("p", [
+					url.length > 0 ?
+						tree("a", [prop("href", url), url]) :
+						tree("span", [style("color", "red"), "No URL specified!"]),
+				]),
+			]);
 		}
 
 		// ====================================================================================
