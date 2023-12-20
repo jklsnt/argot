@@ -42,6 +42,12 @@ class LoginSchema(Schema):
     nick = fields.Str(required=True)
     password = fields.Str(required=True)
 
+class SignupSchema(Schema):
+    nick = fields.Str(required=True)
+    password = fields.Str(required=True)
+    bio = fields.Str()
+    email = fields.Email()
+    
 @app.route("/posts/<post_id>", methods=["GET"])
 def get_post(post_id):
     post_id = int(post_id)
@@ -164,7 +170,6 @@ def login():
     except ValidationError:
         return "Type check failed!", 400
 
-    # NOTE: assumes no repeat usernames (enforce this?)
     user = User.select().where(User.nick == req["nick"])
 
     if len(user) == 0:
@@ -178,6 +183,31 @@ def login():
         return "Invalid password.", 403
 
     login_user(user)
+    return "", 200
+
+@app.route("/signup", methods=["POST"])
+def signup():
+    req = request.json
+
+    try:
+        SignupSchema().validate(req)
+    except ValidationError:
+        return "Type check failed!", 400
+
+    user = User.select().where(User.nick == req["nick"])
+    if len(user) != 0:
+        return f"User with nick '{req['nick']}' already exists!", 400
+
+    # TODO: This is a very scuffed system for enforcing a whitelist.
+    whitelist = [l.strip() for l in open("./whitelist").readlines()]
+    if req["nick"] not in whitelist:
+        return "Not on the whitelist.", 403
+
+    User.new(
+        req["nick"], req["password"],
+        bio = req["bio"] if "bio" in req else None,
+        email = req["email"] if "email" in req else None,
+    )
     return "", 200
 
 @app.route("/tags/<name>", methods=["POST"])
