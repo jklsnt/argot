@@ -235,7 +235,7 @@ def query_posts():
     else:
         tags = query.split("|")
 
-    res = Post.tag_query(tags, intersection=intersection)
+    res = Post.tag_query(tags, tuple(), intersection=intersection)
     return res, 200
 
 @app.route("/logout", methods=["POST"])

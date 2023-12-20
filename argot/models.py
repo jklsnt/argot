@@ -86,13 +86,32 @@ class Post(Model):
             content=content,
         )
 
-    def tag_query(tag_names, intersection=False):
+    def tag_exclude(tag_names):
+        """For handling the case where it's just exclusions."""
+        
+        excl_posts = Post.select().join(TagMap).join(Tag).where(
+            (Post.id == TagMap.post_id) &
+            (TagMap.tag_id == Tag.id) &
+            (Tag.name << excl_tags)
+        ).group_by(Post.id)
+        
+        posts = Post.select().where(~(Post.id << excl_posts))
+        return [p.to_dict() for p in posts]
+
+    def tag_query(tag_names, excl_tags, intersection=False):
         tags = tuple([str(tag) for tag in tag_names])
 
+        excl_posts = Post.select().join(TagMap).join(Tag).where(
+            (Post.id == TagMap.post_id) &
+            (TagMap.tag_id == Tag.id) &
+            (Tag.name << excl_tags)
+        ).group_by(Post.id)
+                
         posts = Post.select().join(TagMap).join(Tag).where(
             (TagMap.tag_id == Tag.id) &
             (Tag.name << tags) &
-            (Post.id == TagMap.post_id)
+            (Post.id == TagMap.post_id) &
+            ~(Post.id << excl_posts)
         ).group_by(Post.id)
         if intersection:
             posts = posts.having(fn.Count(Post.id) == len(tags))
