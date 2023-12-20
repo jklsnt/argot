@@ -256,6 +256,8 @@
 				derender(child);
 			}
 
+			// BUG: An order needs to be defined for these such that a) unmount handlers all run
+			//  before mount handlers and b) users can predict the order of these handlers.
 			for (const [effect_key, effect] of effect_map.entries()) {
 				if (effect.new_state === SENTINEL_MOUNT) {
 					effect.mount(dom);
@@ -425,6 +427,7 @@
 		// Internal
 		const DEPENDENTS = Symbol("DEPENDENTS");
 		const VIEW_CACHE = Symbol("VIEW_CACHE");
+		const DERIVED_MAP = Symbol("DERIVED_MAP");
 		const EMPTY_CACHE_SENTINEL = Symbol("EMPTY_CACHE_SENTINEL");
 
 		// Public
@@ -434,15 +437,27 @@
 
 				this[DEPENDENTS] = new Set();
 				this[VIEW_CACHE] = EMPTY_CACHE_SENTINEL;
+				this[DERIVED_MAP] = new Map();
+			}
+
+			renderChild(namespace, key, ctor) {
+				let store = this[DERIVED_MAP].get(namespace);
+				if (store === undefined) {
+					store = new DerivedComponents();
+					this[DERIVED_MAP].set(namespace, store);
+				}
+
+				return store.fetch(key, ctor).render();
 			}
 
 			dirty() {
-				for (const dependent of this[DEPENDENTS]) {
+				const old_deps = this[DEPENDENTS];
+				this[DEPENDENTS] = new Set();
+				this[VIEW_CACHE] = EMPTY_CACHE_SENTINEL;
+
+				for (const dependent of old_deps) {
 					dependent.dirty();
 				}
-
-				this[VIEW_CACHE] = EMPTY_CACHE_SENTINEL;
-				this[DEPENDENTS].clear();
 			}
 
 			subscribe() {
@@ -453,21 +468,27 @@
 				return this;
 			}
 
-			renderImmediately() {
+			doRender() {
 				throw "this component cannot be rendered";
 			}
 
-			renderCached() {
+			render() {
 				// Ensure that people using this view in their view are invalidated when we invalidate
 				// ourselves.
 				this.subscribe();
 
 				// Recompute a cache if one is not present.
 				if (this[VIEW_CACHE] === EMPTY_CACHE_SENTINEL) {
+					// Reset the derivation stores
+					for (const store of this[DERIVED_MAP].values()) {
+						store.begin();
+					}
+
+					// Render it
 					const parent_scope = Component.RENDER_SCOPE;
 					try {
 						Component.RENDER_SCOPE = this;
-						this[VIEW_CACHE] = this.renderImmediately();
+						this[VIEW_CACHE] = this.doRender();
 					} finally {
 						Component.RENDER_SCOPE = parent_scope;
 					}
@@ -477,15 +498,66 @@
 			}
 		}
 
+		class DerivedComponents {
+			constructor() {
+				this.persistent_cache = new Map();
+				this.to_delete = new Set();
+			}
+
+			begin() {
+				for (const to_delete of this.to_delete) {
+					this.persistent_cache.delete(to_delete);
+				}
+				this.to_delete = new Set(this.persistent_cache.keys());
+			}
+
+			fetch(key, ctor) {
+				this.to_delete.delete(key);
+				let value = this.persistent_cache.get(key);
+				if (value === undefined) {
+					value = ctor();
+					this.persistent_cache.set(key, value);
+				}
+
+				return value;
+			}
+		}
+
 		// ====================================================================================
-		// Now, we can define the application's view components.
+		// Now, we can define the application's model.
 		// ====================================================================================
 
+		class PostListState extends Component {
+			constructor() {
+				super();
+				this.posts = [new PostState("Look at this cool website!", "http://www.example.com")];
+			}
+		}
+
+		class PostState extends Component {
+			constructor(title, url) {
+				super();
+				this.title = title;
+				this.author = "[not specified]";
+				this.time = "[not specified]";
+				this.url = url;
+				this.id = "[not specified]";
+			}
+		}
+
+		// ====================================================================================
+		// ...as well as the app's view components.
+		// ====================================================================================
+
+		// Pages
 		class AppRoot extends Component {
 			constructor() {
 				super();
 				this.view = "home";
-				this.view_comp = new HomePage();
+				this.view_comp = new HomePage(this);
+
+				this.saved_post = new PostState("", "");
+				this.fetched_posts = new PostListState();
 			}
 
 			setView(id) {
@@ -494,11 +566,11 @@
 					"home": HomePage,
 					"about": AboutPage,
 					"submit": SubmitPage,
-				}[id]();
+				}[id](this);
 				this.dirty();
 			}
 
-			renderImmediately() {
+			doRender() {
 				return tree("div", [
 					effect("configure_webpage", () => {
 						document.bgColor = "pink";
@@ -524,19 +596,32 @@
 						]),
 					]),
 					tree("hr", []),
-					this.view_comp.renderCached(),
+					this.view_comp.render(),
 				]);
 			}
 		}
 
 		class HomePage extends Component {
-			renderImmediately() {
-				return tree("div", []);
+			constructor(app) {
+				super();
+				this.app = app;
+			}
+
+			doRender() {
+				const post_list = this.app.fetched_posts.subscribe().posts;
+
+				return tree("div", [
+					post_list.map(state => this.renderChild(
+						PostPreviewView,
+						state.id,
+						() => new PostPreviewView(state),
+					)),
+				]);
 			}
 		}
 
 		class AboutPage extends Component {
-			renderImmediately() {
+			doRender() {
 				return tree("div", [
 					tree("p", ["Welcome to Argot! This is a super duper serious link sharing website for intellectuals! Nya~"]),
 					tree("img", [prop("src", "https://pbs.twimg.com/media/DT_YODIWkAEKH8X.jpg")]),
@@ -546,39 +631,93 @@
 		}
 
 		class SubmitPage extends Component {
-			constructor() {
+			constructor(app) {
 				super();
-				this.name_field = new Ref();
-				this.url_field = new Ref();
+				this.app = app;
 			}
 
-			renderImmediately() {
+			doRender() {
+				const saved_post = this.app.saved_post.subscribe();
+
 				return tree("div", "submit_page", [
-					effect("whee", (target) => {
-						console.log("Mounted", target);
-						return target => console.log("Unmounted", target);
-					}),
 					tree("h2", ["Submit your link here!"]),
 					tree("p", [
-						"Name:",
+						"Title:",
 						"\u{202F}",
-						tree("input", [setRef(this.name_field)]),
+						tree("input", [
+							handler("input", (e) => {
+								saved_post.title = e.target.value;
+								saved_post.dirty();
+							}),
+							effect("init", target => {
+								target.value = saved_post.title;
+							}),
+						]),
 					]),
 					tree("p", [
 						"URL:",
 						"\u{202F}",
-						tree("input", [setRef(this.url_field)]),
+						tree("input", [
+							handler("input", (e) => {
+								saved_post.url = e.target.value;
+								saved_post.dirty();
+							}),
+							effect("init", target => {
+								target.value = saved_post.url;
+							}),
+						]),
 					]),
 					tree("button", [
 						handler("click", target => {
 							console.log("Submitting the stuff!");
-							console.log("Name:", this.name_field.$.value);
-							console.log("URL:", this.url_field.$.value);
+							console.log("Name:", saved_post.title);
+							console.log("URL:", saved_post.url);
+
+							const post = new PostState(saved_post.title, saved_post.url);
+							post.id = `local_post_${this.app.fetched_posts.posts.length}`;
+
+							this.app.fetched_posts.posts.push(post);
+							this.app.fetched_posts.dirty();
 						}),
 						"Submit",
 					]),
+					tree("hr", []),
+					renderPostPreview(
+						saved_post.title,
+						"You",
+						"Now",
+						saved_post.url,
+						"1",
+					),
 				]);
 			}
+		}
+
+		// Home feed
+		class PostPreviewView extends Component {
+			constructor(state) {
+				super();
+				this.state = state;
+			}
+
+			doRender() {
+				const { title, author, time, url, id } = this.state.subscribe();
+				return renderPostPreview(title, author, time, url, id);
+			}
+		}
+
+		function renderPostPreview(title, author, time, url, id) {
+			return tree("div", `post_${id}`, [
+				style("border", "1px solid"),
+				style("padding", "10px"),
+				tree("h2", [title.length > 0 ? title : "No title specified!"]),
+				tree("p", ["By ", tree("strong", [author]), ", posted ", tree("strong", [time])]),
+				tree("p", [
+					url.length > 0 ?
+						tree("a", [prop("href", url), url]) :
+						tree("span", [style("color", "red"), "No URL specified!"]),
+				]),
+			]);
 		}
 
 		// ====================================================================================
@@ -589,7 +728,7 @@
 
 		function tick() {
 			requestAnimationFrame(tick);
-			render(app_container, ROOT.renderCached());
+			render(app_container, ROOT.render());
 		}
 
 		requestAnimationFrame(tick);
