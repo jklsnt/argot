@@ -24,38 +24,59 @@ login_manager.init_app(app)
 def load_user(user_id):
     return User.select().where(User.id == int(user_id)).get()
 
-class PostSchema(Schema):    
+class PostSchema(Schema):
     title = fields.Str()
     link = fields.Url()
     content = fields.Str()
     # tags = fields.List(fields.Str())
 
-class CommentSchema(Schema):    
-    post = fields.Int(required=True)    
+class CommentSchema(Schema):
+    post = fields.Int(required=True)
     content = fields.Str(required=True)
-    parent = fields.Int()    
-    
-class PostsQuerySchema(Schema):    
+    parent = fields.Int()
+
+class PostsQuerySchema(Schema):
     pg = fields.Int()
 
-class LoginSchema(Schema):    
+class LoginSchema(Schema):
     nick = fields.Str(required=True)
-    password = fields.Str(required=True)    
-    
-def assert_post_valid(post_id):
-    if len(Post.select().where(Post.id == post_id)) == 0:
-        abort(404, message=f"A post with the ID {post_id} does not exist!")
+    password = fields.Str(required=True)
 
-@app.route("/posts/<post_id>", methods=["GET"])        
+@app.route("/posts/<post_id>", methods=["GET"])
 def get_post(post_id):
     post_id = int(post_id)
-    assert_post_valid(post_id)
+    if len(Post.select().where(Post.id == post_id)) == 0:
+        return f"A post with the ID {post_id} does not exist!", 404
     p = Post.select().where(Post.id == post_id).get().to_dict()
     cs = Comment.select().where(Comment.post_id == post_id and Comment.parent_id == None)
-    cs = [c.to_mini_dict() for c in cs]         
+    cs = [c.to_mini_dict() for c in cs]
     p["comments"] = cs
 
     return p, 200
+
+@app.route("/posts/<post_id>", methods=["PUT"])
+def update_post(post_id):
+    post_id = int(post_id)
+    req = request.json
+    
+    try:
+        PostSchema().validate(req)
+    except ValidationError:
+        return "Type check failed!", 400
+    
+    if len(Post.select().where(Post.id == post_id)) == 0:
+        return f"A post with the ID {post_id} does not exist!", 404
+    
+    p = Post.select().where(Post.id == post_id).get()
+    if "title" in req:
+        p.title = req["title"]
+    if "link" in req:
+        p.link = req["link"]
+    if "content" in req:
+        p.content = req["content"]
+    p.save()
+
+    return "", 200
 
 @app.route("/posts", methods=["POST"])
 @login_required
@@ -73,7 +94,7 @@ def add_post():
 
         src = urllib.request.urlopen(req["link"])
         soup = BeautifulSoup(src, "html")
-        title = soup.title.string            
+        title = soup.title.string
     else:
         title = req["title"]
 
@@ -90,13 +111,13 @@ def add_post():
 @login_required
 def add_comment():
     req = request.json
-
-    try: 
+    try:
         CommentSchema().validate(req)
     except ValidationError:
-        return "Type check failed!", 400        
+        return "Type check failed!", 400
 
-    assert_post_valid(req['post'])
+    if len(Post.select().where(Post.id == post_id)) == 0:
+        return f"A post with the ID {post_id} does not exist!", 404
 
     if "parent" in req:
         post = Post.select().where(Post.id == req['post']).get()
@@ -113,6 +134,25 @@ def add_comment():
 
     return str(c.id), 200
 
+@app.route("/comment/<comment_id>", methods=["PUT"])
+@login_required
+def update_comment(comment_id):
+    req = request.json
+    comment_id = int(comment_id)
+    
+    if "content" not in req:
+        return "Need new content.", 400    
+
+    query = Comment.select().where(Comment.id == comment_id)
+    if len(query) == 0:
+        return f"A comment with the ID {comment_id} does not exist!", 404
+
+    c = query.get()
+    c.content = req["content"]
+    c.save()
+    
+    return "", 200
+
 @app.route("/login", methods=["POST"])
 def login():
     req = request.json
@@ -120,7 +160,7 @@ def login():
     try:
         LoginSchema().validate(req)
     except ValidationError:
-        return "Type check failed!", 400        
+        return "Type check failed!", 400
 
     # NOTE: assumes no repeat usernames (enforce this?)
     user = User.select().where(User.nick == req["nick"])
@@ -146,34 +186,44 @@ def add_tag(name):
         return "Invalid character in tag name.", 400
     if len(Tag.select().where(Tag.name == name)) != 0:
         return "Tag already exists.", 400
-    
-    t = Tag.create(name=name)    
+
+    t = Tag.create(name=name)
     return str(t.id), 200
 
 @app.route("/tags", methods=["GET"])
-def get_tags():    
+def get_tags():
     out = [{"name": t.name, "id": t.id} for t in Tag.select()]
     return out, 200
 
 @app.route("/posts/<post_id>/tags", methods=["PUT"])
 @login_required
 def add_post_tag(post_id):
-    assert_post_valid(int(post_id))
+    if len(Post.select().where(Post.id == post_id)) == 0:
+        return f"A post with the ID {post_id} does not exist!", 404
     if "name" not in request.args:
-        return "Need a tag name!", 400    
+        return "Need a tag name!", 400
     tag_name = str(request.args["name"])
 
     tq = Tag.select().where(Tag.name == tag_name)
     if len(tq) == 0:
         return f"A tag with the name {tag_name} does not exist!", 404
     tag = tq.get()
-    print(tag.id)
+    print(Post.select().where(Post.id == post_id).get().title, tag.name,"\n")    
 
-    query = TagMap.select().where(TagMap.post_id == post_id and TagMap.tag_id == tag.id)
+    all_tags = TagMap.select()
+    for i in all_tags:
+        print(i.post_id.title, i.tag_id.name)
+
+    query = TagMap.select().where(
+        (TagMap.post_id == post_id) & (TagMap.tag_id == tag.id)
+    )
     if len(query) != 0:
+        i = query.get()
+        print(i.post_id, post_id)
+        print(i.post_id.title, i.tag_id.name)
         return str(query.get().id), 200
-    
-    tm = TagMap.new(post_id=post_id, tag_id=tag.id)
+
+    tm = TagMap.create(post_id=post_id, tag_id=tag.id)
     return str(tm.id), 200
 
 @app.route("/posts/query", methods=["GET"])
@@ -188,12 +238,11 @@ def query_posts():
     res = Post.tag_query(tags, intersection=intersection)
     return res, 200
 
-
 @app.route("/logout", methods=["POST"])
 def logout():
     logout_user()
     return "", 200
-    
+
 page_size = 10
 
 @app.route("/posts", methods=["GET"])
@@ -203,10 +252,10 @@ def get_posts():
     except ValidationError:
         return "Type check failed!", 400
 
-    page = int(request.args["pg"]) if "pg" in request.args else 0                
+    page = int(request.args["pg"]) if "pg" in request.args else 0
     ps = Post.select().order_by(Post.time.desc())
     ps = itertools.islice(ps, page_size*page, page_size*(page+1))
-    return [p.to_dict() for p in ps], 200 
+    return [p.to_dict() for p in ps], 200
 
 if __name__ == '__main__':
     app.run(debug=True)
