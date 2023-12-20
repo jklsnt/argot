@@ -14,6 +14,7 @@ CREATE TABLE posts (
   link       TEXT,
   author_id  INTEGER NOT NULL,
   content    TEXT,
+  private    BOOLEAN,
   FOREIGN KEY(author_id) REFERENCES users(id)
 );
 
@@ -37,6 +38,7 @@ CREATE TABLE comments (
   parent_id  INTEGER,
   author_id  INTEGER NOT NULL,
   content    TEXT NOT NULL,
+  private    BOOLEAN,
   FOREIGN KEY(post_id)   REFERENCES posts(id),
   FOREIGN KEY(parent_id) REFERENCES comments(id),
   FOREIGN KEY(author_id) REFERENCES users(id)

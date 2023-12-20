@@ -49,6 +49,8 @@ def get_post(post_id):
         return f"A post with the ID {post_id} does not exist!", 404
     p = Post.select().where(Post.id == post_id).get().to_dict()
     cs = Comment.select().where(Comment.post_id == post_id and Comment.parent_id == None)
+    if not current_user.is_authenticated:
+        cs = filter(lambda c: not c.private, cs)
     cs = [c.to_mini_dict() for c in cs]
     p["comments"] = cs
 
@@ -107,7 +109,7 @@ def add_post():
 
     return str(p.id), 200
 
-@app.route("/comment", methods=["POST"])
+@app.route("/comments", methods=["POST"])
 @login_required
 def add_comment():
     req = request.json
@@ -134,7 +136,7 @@ def add_comment():
 
     return str(c.id), 200
 
-@app.route("/comment/<comment_id>", methods=["PUT"])
+@app.route("/comments/<comment_id>", methods=["PUT"])
 @login_required
 def update_comment(comment_id):
     req = request.json
@@ -226,6 +228,12 @@ def add_post_tag(post_id):
     tm = TagMap.create(post_id=post_id, tag_id=tag.id)
     return str(tm.id), 200
 
+# @app.route("/posts/search", methods=["GET"])
+# def search_posts():
+#     term = request.data.decode()    
+#     posts = Post.select().where(Post.match(term)).order_by(Post.bm25())
+#     return [p.to_dict() for p in posts], 200
+
 @app.route("/posts/query", methods=["GET"])
 def query_posts():
     query = request.data.decode()
@@ -282,6 +290,10 @@ def get_posts():
     page = int(request.args["pg"]) if "pg" in request.args else 0
     ps = Post.select().order_by(Post.time.desc())
     ps = itertools.islice(ps, page_size*page, page_size*(page+1))
+
+    if not current_user.is_authenticated:
+        ps = filter(lambda p: not p.private, ps)
+    
     return [p.to_dict() for p in ps], 200
 
 if __name__ == '__main__':

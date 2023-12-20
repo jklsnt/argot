@@ -4,6 +4,7 @@ import hashlib
 import string
 
 from peewee import *
+from playhouse.sqlite_ext import *
 from flask_login import UserMixin
 
 def date_str(dt):
@@ -25,7 +26,7 @@ def date_str(dt):
         return f"{diff.seconds} second{'' if diff.seconds == 1 else 's'} ago"
     return "just now" # you don't need microsecond precision.
 
-db = SqliteDatabase('./argot.db', pragmas={
+db = SqliteExtDatabase('./argot.db', pragmas={
     'journal_mode': 'wal',
     'cache_size': -1 * 64000,  # 64MB
     'foreign_keys': 1,
@@ -67,23 +68,25 @@ class User(UserMixin, Model):
 
 class Post(Model):
     id = AutoField(primary_key=True)
-    title = TextField()
+    title = TextField(null=True)
     link = TextField(null=True)
     author_id = ForeignKeyField(User, backref="posts")
     time = DateTimeField()
     content = TextField(null=True)
+    private = BooleanField()
 
     class Meta:
         database = db
         table_name = "posts"
 
-    def new(link, title, author, time=datetime.now(), content=None, tags=None):
+    def new(link, title, author, time=datetime.now(), content=None, tags=None, private=False):
         return Post.create(
             title=title,
             link=link,
             author_id=author,
             time=time,
             content=content,
+            private=private
         )
 
     def tag_exclude(excl_tags):
@@ -126,7 +129,8 @@ class Post(Model):
             "author": self.author_id.nick,
             "time": date_str(self.time),
             "content": self.content,
-            "tags": [t.tag_id.name for t in self.tags]
+            "tags": [t.tag_id.name for t in self.tags],
+            "private": self.private
         }
 
 class Tag(Model):
@@ -153,25 +157,28 @@ class Comment(Model):
     parent_id = ForeignKeyField('self', null=True, backref="children")
     author_id = ForeignKeyField(User, backref="comments")
     content = TextField()
+    private = BooleanField()
 
     class Meta:
         database = db
         table_name = "comments"
 
-    def new(post, author, content, parent=None, time=datetime.now()):
+    def new(post, author, content, parent=None, time=datetime.now(), private=False):
         return Comment.create(
             post_id=post,
             author_id=author,
             content=content,
             parent_id=parent,
             time=time,
+            private=private
         )
 
-    def to_mini_dict(self):
+    def to_mini_dict(self):            
         return {
             "id": self.id,
             "author": self.author_id.nick,
             "time": date_str(self.time),
             "content": self.content,
-            "children": [c.to_mini_dict() for c in self.children]
-        }
+            "children": [c.to_mini_dict() for c in self.children],
+            "private": self.private
+        }        
