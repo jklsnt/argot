@@ -86,7 +86,7 @@ class Post(Model):
             content=content,
         )
 
-    def tag_exclude(tag_names):
+    def tag_exclude(excl_tags):
         """For handling the case where it's just exclusions."""
         
         excl_posts = Post.select().join(TagMap).join(Tag).where(

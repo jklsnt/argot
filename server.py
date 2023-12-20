@@ -229,13 +229,40 @@ def add_post_tag(post_id):
 @app.route("/posts/query", methods=["GET"])
 def query_posts():
     query = request.data.decode()
-    intersection = query.find("+") != -1
-    if intersection:
-        tags = query.split("+")
-    else:
-        tags = query.split("|")
+    intersection = None
 
-    res = Post.tag_query(tags, tuple(), intersection=intersection)
+    tags = []
+    excl = []
+    excluding = False
+    pos = 0
+    # Real gross, I know. I swear it's just a quick hack.
+    for i, c in enumerate(query):
+        if c == '|' and intersection is None:
+            intersection = False
+        elif c == '+' and intersection is None:
+            intersection = True
+        elif c == '+' and intersection == False:
+            return "Mixing and matching +/| operators not supported!", 400
+        elif c == '|' and intersection == True:
+            return "Mixing and matching +/| operators not supported!", 400
+        if c in ('|', '+'):            
+            tags.append(query[pos:i])
+            pos = i + 1
+        elif c == '-':
+            if excluding: excl.append(query[pos:i])
+            else:
+                tags.append(query[pos:i])
+                excluding = True
+            pos = i + 1
+    if excluding: excl.append(query[pos:])
+    else: tags.append(query[pos:])
+
+    # NOTE: the way the parsing works means that just exclusions
+    # should erroneously result in an empty first exclusion tag
+    if tags[0] == '':        
+        res = Post.tag_exclude(excl)
+    else:
+        res = Post.tag_query(tags, excl, intersection=intersection)
     return res, 200
 
 @app.route("/logout", methods=["POST"])
