@@ -17,6 +17,15 @@
 		// ====================================================================================
 		// We begin by defining a custom UI framework because all the other frameworks have the
 		// fatal flaw of not being invented here.
+		//
+		// General architecture:
+		//
+		// - This module handles the ability to reconcile a virtual DOM with the physical DOM
+		//   and exposes an API for writing effectful hooks.
+		// - The second module handles the ability to cache virtual DOMs and update them only
+		//   on state change as well as the ability to map state to derived state in a
+		//   memoization-friendly way.
+		//
 		// ====================================================================================
 
 		// Internals
@@ -443,7 +452,7 @@
 			renderChild(namespace, key, ctor) {
 				let store = this[DERIVED_MAP].get(namespace);
 				if (store === undefined) {
-					store = new DerivedComponents();
+					store = new DerivedComponentMap();
 					this[DERIVED_MAP].set(namespace, store);
 				}
 
@@ -498,7 +507,7 @@
 			}
 		}
 
-		class DerivedComponents {
+		class DerivedComponentMap {
 			constructor() {
 				this.persistent_cache = new Map();
 				this.to_delete = new Set();
@@ -542,6 +551,16 @@
 				this.time = "[not specified]";
 				this.url = url;
 				this.id = "[not specified]";
+				this.validateUrl();
+			}
+
+			validateUrl() {
+				try {
+					const url = new URL(this.url);
+					this.is_url_valid = url.protocol === "http:" || url.protocol === "https:";
+				} catch (e) {
+					this.is_url_valid = false;
+				}
 			}
 		}
 
@@ -649,9 +668,7 @@
 								saved_post.title = e.target.value;
 								saved_post.dirty();
 							}),
-							effect("init", target => {
-								target.value = saved_post.title;
-							}),
+							prop("value", saved_post.title),
 						]),
 					]),
 					tree("p", [
@@ -660,35 +677,30 @@
 						tree("input", [
 							handler("input", (e) => {
 								saved_post.url = e.target.value;
+								saved_post.validateUrl();
 								saved_post.dirty();
 							}),
-							effect("init", target => {
-								target.value = saved_post.url;
-							}),
+							prop("value", saved_post.url),
 						]),
 					]),
 					tree("button", [
 						handler("click", target => {
-							console.log("Submitting the stuff!");
-							console.log("Name:", saved_post.title);
-							console.log("URL:", saved_post.url);
-
+							// Create the post
 							const post = new PostState(saved_post.title, saved_post.url);
 							post.id = `local_post_${this.app.fetched_posts.posts.length}`;
-
 							this.app.fetched_posts.posts.push(post);
 							this.app.fetched_posts.dirty();
+
+							// Clear the saved post
+							this.app.saved_post.title = "";
+							this.app.saved_post.url = "";
+							this.app.saved_post.validateUrl();
+							this.app.saved_post.dirty();
 						}),
 						"Submit",
 					]),
 					tree("hr", []),
-					renderPostPreview(
-						saved_post.title,
-						"You",
-						"Now",
-						saved_post.url,
-						"1",
-					),
+					this.renderChild(PostPreviewView, "preview", () => new PostPreviewView(this.app.saved_post)),
 				]);
 			}
 		}
@@ -701,23 +713,26 @@
 			}
 
 			doRender() {
-				const { title, author, time, url, id } = this.state.subscribe();
-				return renderPostPreview(title, author, time, url, id);
-			}
-		}
+				const { title, author, time, url, id, is_url_valid } = this.state.subscribe();
 
-		function renderPostPreview(title, author, time, url, id) {
-			return tree("div", `post_${id}`, [
-				style("border", "1px solid"),
-				style("padding", "10px"),
-				tree("h2", [title.length > 0 ? title : "No title specified!"]),
-				tree("p", ["By ", tree("strong", [author]), ", posted ", tree("strong", [time])]),
-				tree("p", [
-					url.length > 0 ?
-						tree("a", [prop("href", url), url]) :
-						tree("span", [style("color", "red"), "No URL specified!"]),
-				]),
-			]);
+				return tree("div", `post_${id}`, [
+					style("border", "1px solid"),
+					style("padding", "10px"),
+					tree("h2", [title.length > 0 ? title : "No title specified!"]),
+					tree("p", ["By ", tree("strong", [author]), ", posted ", tree("strong", [time])]),
+					tree("p", [
+						url.length > 0 ?
+							(is_url_valid ?
+								tree("a", [prop("href", url), url]) :
+								tree("span", [
+									tree("span", [style("color", "gray"), url]),
+									tree("span", [style("color", "red"), " - This URL is not valid"])
+								])
+							) :
+							tree("span", [style("color", "red"), "No URL specified!"]),
+					]),
+				]);
+			}
 		}
 
 		// ====================================================================================
