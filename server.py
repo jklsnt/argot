@@ -240,29 +240,32 @@ def add_post_tag(post_id):
     if len(tq) == 0:
         return f"A tag with the name {tag_name} does not exist!", 404
     tag = tq.get()
-    print(Post.select().where(Post.id == post_id).get().title, tag.name,"\n")    
-
-    all_tags = TagMap.select()
-    for i in all_tags:
-        print(i.post_id.title, i.tag_id.name)
 
     query = TagMap.select().where(
         (TagMap.post_id == post_id) & (TagMap.tag_id == tag.id)
     )
     if len(query) != 0:
         i = query.get()
-        print(i.post_id, post_id)
-        print(i.post_id.title, i.tag_id.name)
         return str(query.get().id), 200
 
     tm = TagMap.create(post_id=post_id, tag_id=tag.id)
     return str(tm.id), 200
 
-# @app.route("/posts/search", methods=["GET"])
-# def search_posts():
-#     term = request.data.decode()    
-#     posts = Post.select().where(Post.match(term)).order_by(Post.bm25())
-#     return [p.to_dict() for p in posts], 200
+@app.route("/posts/search", methods=["GET"])
+def search_posts():
+    term = request.data.decode()    
+    posts = Post.select().where(Match(Post.content, term))
+    if not current_user.is_authenticated:
+        posts = filter(lambda p: not p.private, posts)
+    return [p.to_dict() for p in posts], 200
+
+@app.route("/comments/search", methods=["GET"])
+def search_comments():
+    term = request.data.decode()    
+    cs = Comment.select().where(Match(Comment.content, term))
+    if not current_user.is_authenticated:
+        cs = filter(lambda c: not c.private, cs)
+    return [c.to_mini_dict() for c in cs], 200
 
 @app.route("/posts/query", methods=["GET"])
 def query_posts():

@@ -1,5 +1,5 @@
 CREATE TABLE users (
-  id         INTEGER PRIMARY KEY,
+  id         SERIAL PRIMARY KEY,
   nick       TEXT NOT NULL,
   bio        TEXT,
   email		 TEXT,
@@ -8,7 +8,7 @@ CREATE TABLE users (
 );
 
 CREATE TABLE posts (
-  id         INTEGER PRIMARY KEY,
+  id         SERIAL PRIMARY KEY,
   time       TIMESTAMP NOT NULL,
   title      TEXT NOT NULL,
   link       TEXT,
@@ -18,21 +18,23 @@ CREATE TABLE posts (
   FOREIGN KEY(author_id) REFERENCES users(id)
 );
 
+CREATE INDEX post_content_idx ON posts USING gin(to_tsvector('english', content));
+
 CREATE TABLE tags (
-  id         INTEGER PRIMARY KEY,
+  id         SERIAL PRIMARY KEY,
   name       TEXT NOT NULL
 );
 
 CREATE TABLE tagmaps (
-  id         INTEGER PRIMARY KEY,
+  id         SERIAL PRIMARY KEY,
   post_id    INTEGER NOT NULL,
   tag_id     INTEGER NOT NULL,
-  FOREIGN KEY(post_id)   REFERENCES posts(id)
+  FOREIGN KEY(post_id)   REFERENCES posts(id),
   FOREIGN KEY(tag_id)    REFERENCES tags(id)
 );
 
 CREATE TABLE comments (
-  id         INTEGER PRIMARY KEY,
+  id         SERIAL PRIMARY KEY,
   time       TIMESTAMP NOT NULL,
   post_id    INTEGER NOT NULL,
   parent_id  INTEGER,
@@ -43,3 +45,5 @@ CREATE TABLE comments (
   FOREIGN KEY(parent_id) REFERENCES comments(id),
   FOREIGN KEY(author_id) REFERENCES users(id)
 );
+
+CREATE INDEX comment_content_idx ON comments USING gin(to_tsvector('english', content));

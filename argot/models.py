@@ -4,7 +4,7 @@ import hashlib
 import string
 
 from peewee import *
-from playhouse.sqlite_ext import *
+from playhouse.postgres_ext import *
 from flask_login import UserMixin
 
 def date_str(dt):
@@ -26,12 +26,8 @@ def date_str(dt):
         return f"{diff.seconds} second{'' if diff.seconds == 1 else 's'} ago"
     return "just now" # you don't need microsecond precision.
 
-db = SqliteExtDatabase('./argot.db', pragmas={
-    'journal_mode': 'wal',
-    'cache_size': -1 * 64000,  # 64MB
-    'foreign_keys': 1,
-    'ignore_check_constraints': 0,
-    'synchronous': 0})
+
+db = PostgresqlExtDatabase('argot', host="/var/run/postgresql")
 
 class User(UserMixin, Model):
     class Meta:
