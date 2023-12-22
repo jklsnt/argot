@@ -13,6 +13,25 @@
 
 	<script>
 		// Hey, I heard you liked single page apps!
+		//
+		// ArgotUI To-Do:
+		//
+		// - Give effect runner a more consistent execution order and isolate it from exceptions.
+		//   Also ensure that externally unmounted nodes also discard their effects.
+		//
+		// - Make `tree` more flexible with input handling (should concatenate consecutive Texts,
+		//   support nested fragments, and should ignore `null` and `undefined`).
+		//
+		// - Isolate renders from exceptions by rendering a fallback value.
+		//
+		// - Implement custom user events. These need not be bidirectionally destructive since it's
+		//   a user error to maintain a handler on a non-existent target.
+		//
+		// ArgotUI To-Not-Do:
+		//
+		// - We don't need a custom component lifecycle model since, in all cases, defining a
+		//   fragment with effects will have the desired behavior.
+		//
 
 		// ====================================================================================
 		// We begin by defining a custom UI framework because all the other frameworks have the
@@ -532,35 +551,63 @@
 			}
 		}
 
+		// Short forms
+		class DerivedComponent extends Component {
+			constructor(renderer) {
+				super();
+				this.renderer = renderer;
+			}
+
+			doRender() {
+				return this.renderer(this.renderChild.bind(this));
+			}
+		}
+
+		class PodComponent extends Component {
+			constructor() {
+				super();
+
+				return new Proxy(this, {
+					get(target, p, receiver) {
+						target.subscribe();
+						return Reflect.get(target, p, receiver);
+					},
+					set(target, p, value, receiver) {
+						target.dirty();
+						return Reflect.set(target, p, value, receiver);
+					}
+				});
+			}
+		}
+
 		// ====================================================================================
 		// Now, we can define the application's model.
 		// ====================================================================================
 
-		class PostListState extends Component {
+		class PostListState extends PodComponent {
 			constructor() {
 				super();
-				this.posts = [new PostState("Look at this cool website!", "http://www.example.com")];
+				this.posts = [new PostState("post_0", "Look at this cool website!", "http://www.example.com")];
 			}
 		}
 
-		class PostState extends Component {
-			constructor(title, url) {
+		class PostState extends PodComponent {
+			constructor(id, title, url) {
 				super();
+				this.id = id;
 				this.title = title;
+				this.url = url;
 				this.author = "[not specified]";
 				this.time = "[not specified]";
-				this.url = url;
-				this.id = "[not specified]";
-				this.validateUrl();
-			}
 
-			validateUrl() {
-				try {
-					const url = new URL(this.url);
-					this.is_url_valid = url.protocol === "http:" || url.protocol === "https:";
-				} catch (e) {
-					this.is_url_valid = false;
-				}
+				this.is_url_valid = new DerivedComponent(() => {
+					try {
+						const url = new URL(this.url);
+						return url.protocol === "http:" || url.protocol === "https:";
+					} catch (e) {
+						return false;
+					}
+				});
 			}
 		}
 
@@ -575,7 +622,7 @@
 				this.view = "home";
 				this.view_comp = new HomePage(this);
 
-				this.saved_post = new PostState("", "");
+				this.saved_post = new PostState("saved_post", "", "");
 				this.fetched_posts = new PostListState();
 			}
 
@@ -627,7 +674,7 @@
 			}
 
 			doRender() {
-				const post_list = this.app.fetched_posts.subscribe().posts;
+				const post_list = this.app.fetched_posts.posts;
 
 				return tree("div", [
 					post_list.map(state => this.renderChild(
@@ -656,7 +703,7 @@
 			}
 
 			doRender() {
-				const saved_post = this.app.saved_post.subscribe();
+				const saved_post = this.app.saved_post;
 
 				return tree("div", "submit_page", [
 					tree("h2", ["Submit your link here!"]),
@@ -666,7 +713,6 @@
 						tree("input", [
 							handler("input", (e) => {
 								saved_post.title = e.target.value;
-								saved_post.dirty();
 							}),
 							prop("value", saved_post.title),
 						]),
@@ -677,8 +723,6 @@
 						tree("input", [
 							handler("input", (e) => {
 								saved_post.url = e.target.value;
-								saved_post.validateUrl();
-								saved_post.dirty();
 							}),
 							prop("value", saved_post.url),
 						]),
@@ -686,16 +730,17 @@
 					tree("button", [
 						handler("click", target => {
 							// Create the post
-							const post = new PostState(saved_post.title, saved_post.url);
-							post.id = `local_post_${this.app.fetched_posts.posts.length}`;
+							const post = new PostState(
+								`post_${this.app.fetched_posts.posts.length}`,
+								saved_post.title,
+								saved_post.url,
+							);
 							this.app.fetched_posts.posts.push(post);
 							this.app.fetched_posts.dirty();
 
 							// Clear the saved post
 							this.app.saved_post.title = "";
 							this.app.saved_post.url = "";
-							this.app.saved_post.validateUrl();
-							this.app.saved_post.dirty();
 						}),
 						"Submit",
 					]),
@@ -713,7 +758,7 @@
 			}
 
 			doRender() {
-				const { title, author, time, url, id, is_url_valid } = this.state.subscribe();
+				const { title, author, time, url, id, is_url_valid } = this.state;
 
 				return tree("div", `post_${id}`, [
 					style("border", "1px solid"),
@@ -722,7 +767,7 @@
 					tree("p", ["By ", tree("strong", [author]), ", posted ", tree("strong", [time])]),
 					tree("p", [
 						url.length > 0 ?
-							(is_url_valid ?
+							(is_url_valid.render() ?
 								tree("a", [prop("href", url), url]) :
 								tree("span", [
 									tree("span", [style("color", "gray"), url]),
