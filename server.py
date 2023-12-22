@@ -16,7 +16,7 @@ import urllib
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = "uh idk whats secret"
-CORS(app)
+CORS(app, supports_credentials=True)
 login_manager = LoginManager()
 login_manager.init_app(app)
 
@@ -28,12 +28,14 @@ class PostSchema(Schema):
     title = fields.Str()
     link = fields.Url()
     content = fields.Str()
+    private = fields.Bool()
     # tags = fields.List(fields.Str())
 
 class CommentSchema(Schema):
     post = fields.Int(required=True)
     content = fields.Str(required=True)
     parent = fields.Int()
+    private = fields.Bool()
 
 class PostsQuerySchema(Schema):
     pg = fields.Int()
@@ -54,7 +56,7 @@ def get_post(post_id):
     if len(Post.select().where(Post.id == post_id)) == 0:
         return f"A post with the ID {post_id} does not exist!", 404
     p = Post.select().where(Post.id == post_id).get().to_dict()
-    cs = Comment.select().where(Comment.post_id == post_id and Comment.parent_id == None)
+    cs = Comment.select().where((Comment.post_id == post_id) & (Comment.parent_id == None))
     if not current_user.is_authenticated:
         cs = filter(lambda c: not c.private, cs)
     cs = [c.to_mini_dict() for c in cs]
@@ -111,6 +113,7 @@ def add_post():
         title,
         current_user.id,
         content=req["content"],
+        private=req["private"] if "private" in req else False,
     )
 
     return str(p.id), 200
@@ -124,7 +127,7 @@ def add_comment():
     except ValidationError:
         return "Type check failed!", 400
 
-    if len(Post.select().where(Post.id == post_id)) == 0:
+    if len(Post.select().where(Post.id == int(req["post"]))) == 0:
         return f"A post with the ID {post_id} does not exist!", 404
 
     if "parent" in req:
@@ -138,6 +141,7 @@ def add_comment():
         current_user.id,
         req["content"],
         parent=req["parent"] if "parent" in req else None,
+        private=req["private"] if "private" in req else False,
     )
 
     return str(c.id), 200
@@ -182,6 +186,7 @@ def login():
     if user.hash != hash:
         return "Invalid password.", 403
 
+    print(f"Logged in {user.nick}")
     login_user(user)
     return "", 200
 
@@ -227,6 +232,28 @@ def get_tags():
     out = [{"name": t.name, "id": t.id} for t in Tag.select()]
     return out, 200
 
+@app.route("/users/<user_name>", methods=["GET"])
+def get_user(user_name):    
+    query = User.select().where(User.nick == str(user_name))
+    if len(query) == 0:
+        print(f"failed to find {str(user_name)}")
+        return "No such user.", 404
+    user = query.get()
+    posts = user.posts
+    comments = user.comments
+    if not current_user.is_authenticated:
+        posts = filter(lambda p: not p.private, posts)
+        comments = filter(lambda c: not c.private, comments)
+    
+    out = {
+        "nick": user.nick,
+        "bio": user.bio,
+        "posts": [p.to_dict() for p in posts],
+        "comments": [c.to_flat_dict() for c in comments],
+    }
+    
+    return out, 200
+
 @app.route("/posts/<post_id>/tags", methods=["PUT"])
 @login_required
 def add_post_tag(post_id):
@@ -251,7 +278,7 @@ def add_post_tag(post_id):
     tm = TagMap.create(post_id=post_id, tag_id=tag.id)
     return str(tm.id), 200
 
-@app.route("/posts/search", methods=["GET"])
+@app.route("/posts/search", methods=["PUT"])
 def search_posts():
     term = request.data.decode()    
     posts = Post.select().where(Match(Post.content, term))
@@ -267,7 +294,7 @@ def search_comments():
         cs = filter(lambda c: not c.private, cs)
     return [c.to_mini_dict() for c in cs], 200
 
-@app.route("/posts/query", methods=["GET"])
+@app.route("/posts/query", methods=["PUT"])
 def query_posts():
     query = request.data.decode()
     intersection = None
@@ -311,7 +338,7 @@ def logout():
     logout_user()
     return "", 200
 
-page_size = 10
+# page_size = 10
 
 @app.route("/posts", methods=["GET"])
 def get_posts():
@@ -322,9 +349,10 @@ def get_posts():
 
     page = int(request.args["pg"]) if "pg" in request.args else 0
     ps = Post.select().order_by(Post.time.desc())
-    ps = itertools.islice(ps, page_size*page, page_size*(page+1))
+    # ps = itertools.islice(ps, page_size*page, page_size*(page+1))
 
     if not current_user.is_authenticated:
+        print("user not auth'd?")
         ps = filter(lambda p: not p.private, ps)
     
     return [p.to_dict() for p in ps], 200

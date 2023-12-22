@@ -11,7 +11,7 @@ def date_str(dt):
     """Scuffed func to convert datetime to relative time in natural language.
     E.g. dt -> '3 hours ago'
     It's 2:27 AM as I write this so cut me some slack.
-    """
+    """    
     now = datetime.now()
     diff = now - dt
     if diff.days != 0:
@@ -75,12 +75,12 @@ class Post(Model):
         database = db
         table_name = "posts"
 
-    def new(link, title, author, time=datetime.now(), content=None, tags=None, private=False):
+    def new(link, title, author, time=None, content=None, tags=None, private=False):
         return Post.create(
             title=title,
             link=link,
             author_id=author,
-            time=time,
+            time=time if time is not None else datetime.now(),
             content=content,
             private=private
         )
@@ -159,17 +159,28 @@ class Comment(Model):
         database = db
         table_name = "comments"
 
-    def new(post, author, content, parent=None, time=datetime.now(), private=False):
+    def new(post, author, content, parent=None, time=None, private=False):
         return Comment.create(
             post_id=post,
             author_id=author,
             content=content,
             parent_id=parent,
-            time=time,
+            time=time if time is not None else datetime.now(),
             private=private
         )
 
-    def to_mini_dict(self):            
+    def to_flat_dict(self):            
+        return {
+            "id": self.id,
+            "post_id": self.post_id.id,
+            "author": self.author_id.nick,
+            "time": date_str(self.time),
+            "content": self.content,
+            "private": self.private
+        }        
+    
+    def to_mini_dict(self):
+        print(self.time, self.content)
         return {
             "id": self.id,
             "author": self.author_id.nick,
