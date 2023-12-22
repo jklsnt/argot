@@ -485,14 +485,33 @@
 				return this.deriveChild(namespace, key, ctor).render();
 			}
 
+			renderChildBound(namespace, key, ctor, binder) {
+				const child = this.deriveChild(namespace, key, () => {
+					const comp = ctor();
+
+					return new InlineComponent(me => {
+						this.subscribe();
+						me.deriveBinder("binder", cx => me.__custom_binder(comp, cx));
+
+						return comp.render();
+					});
+				});
+				// HACK: I'm too lazy to define a new component for this so "surprise type shape
+				//  extensions" it is!
+				child.__custom_binder = (a, b) => binder(a, b);
+				return child.render();
+			}
+
 			deriveBinder(key, effect) {
-				return this.renderChild(BINDER_NAMESPACE, key, () => new ShortComponent(comp => {
+				const comp = this.deriveChild(BINDER_NAMESPACE, key, () => new InlineComponent(null));
+				comp.renderer = comp => {
 					// By default, components don't subscribe to their caller. However, because it
 					// is likely that this binder will access its parent state, we subscribe to it
 					// here.
 					this.subscribe();
 					effect(comp);
-				}));
+				};
+				comp.render();
 			}
 
 			dirty() {
@@ -590,7 +609,7 @@
 		}
 
 		// Short forms
-		class ShortComponent extends Component {
+		class InlineComponent extends Component {
 			constructor(renderer) {
 				super();
 				this.renderer = renderer;
@@ -621,7 +640,7 @@
 				this.author = "[not specified]";
 				this.time = "[not specified]";
 
-				this.is_url_valid = new ShortComponent(() => {
+				this.is_url_valid = new InlineComponent(() => {
 					try {
 						const url = new URL(this.subscribe().url);
 						return url.protocol === "http:" || url.protocol === "https:";
@@ -660,8 +679,10 @@
 			}
 
 			doRender() {
+				const { username } = this;
+
 				this.deriveBinder("bind_username", comp => {
-					this.saved_post.dirtySet("author", this.username);
+					this.saved_post.dirtySet("author", username);
 				});
 
 				return elem("div", [
@@ -695,6 +716,7 @@
 							}),
 							"Fake Login Button",
 						]),
+						elem("strong", [" - ", username.toUpperCase()]),
 					]),
 					elem("hr", []),
 					this.view_comp.render(),
