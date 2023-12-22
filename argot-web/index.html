@@ -27,6 +27,8 @@
 		// - Implement custom user events. These need not be bidirectionally destructive since it's
 		//   a user error to maintain a handler on a non-existent target.
 		//
+		// - Implement a standard property passing mechanism.
+		//
 		// ArgotUI To-Not-Do:
 		//
 		// - We don't need a custom component lifecycle model since, in all cases, defining a
@@ -459,10 +461,10 @@
 		const EMPTY_CACHE_SENTINEL = Symbol("EMPTY_CACHE_SENTINEL");
 
 		// Public
+		let RENDER_SCOPE = null;
+
 		class Component {
 			constructor() {
-				Component.RENDER_SCOPE = null;
-
 				this[DEPENDENTS] = new Set();
 				this[VIEW_CACHE] = EMPTY_CACHE_SENTINEL;
 				this[DERIVED_MAP] = new Map();
@@ -489,8 +491,12 @@
 			}
 
 			subscribe() {
-				if (Component.RENDER_SCOPE !== null) {
-					this[DEPENDENTS].add(Component.RENDER_SCOPE);
+				if (RENDER_SCOPE !== null) {
+					this[DEPENDENTS].add(RENDER_SCOPE);
+				} else {
+					if (this.state !== undefined) {
+						console.trace(this);
+					}
 				}
 
 				return this;
@@ -513,12 +519,12 @@
 					}
 
 					// Render it
-					const parent_scope = Component.RENDER_SCOPE;
+					const parent_scope = RENDER_SCOPE;
 					try {
-						Component.RENDER_SCOPE = this;
+						RENDER_SCOPE = this;
 						this[VIEW_CACHE] = this.doRender();
 					} finally {
-						Component.RENDER_SCOPE = parent_scope;
+						RENDER_SCOPE = parent_scope;
 					}
 				}
 
@@ -563,35 +569,18 @@
 			}
 		}
 
-		class PodComponent extends Component {
-			constructor() {
-				super();
-
-				return new Proxy(this, {
-					get(target, p, receiver) {
-						target.subscribe();
-						return Reflect.get(target, p, receiver);
-					},
-					set(target, p, value, receiver) {
-						target.dirty();
-						return Reflect.set(target, p, value, receiver);
-					}
-				});
-			}
-		}
-
 		// ====================================================================================
 		// Now, we can define the application's model.
 		// ====================================================================================
 
-		class PostListState extends PodComponent {
+		class PostListState extends Component {
 			constructor() {
 				super();
 				this.posts = [new PostState("post_0", "Look at this cool website!", "http://www.example.com")];
 			}
 		}
 
-		class PostState extends PodComponent {
+		class PostState extends Component {
 			constructor(id, title, url) {
 				super();
 				this.id = id;
@@ -602,7 +591,7 @@
 
 				this.is_url_valid = new DerivedComponent(() => {
 					try {
-						const url = new URL(this.url);
+						const url = new URL(this.subscribe().url);
 						return url.protocol === "http:" || url.protocol === "https:";
 					} catch (e) {
 						return false;
@@ -674,7 +663,7 @@
 			}
 
 			doRender() {
-				const post_list = this.app.fetched_posts.posts;
+				const post_list = this.app.fetched_posts.subscribe().posts;
 
 				return tree("div", [
 					post_list.map(state => this.renderChild(
@@ -703,7 +692,8 @@
 			}
 
 			doRender() {
-				const saved_post = this.app.saved_post;
+				const { saved_post, fetched_posts } = this.app;
+				saved_post.subscribe();
 
 				return tree("div", "submit_page", [
 					tree("h2", ["Submit your link here!"]),
@@ -713,6 +703,7 @@
 						tree("input", [
 							handler("input", (e) => {
 								saved_post.title = e.target.value;
+								saved_post.dirty();
 							}),
 							prop("value", saved_post.title),
 						]),
@@ -723,6 +714,7 @@
 						tree("input", [
 							handler("input", (e) => {
 								saved_post.url = e.target.value;
+								saved_post.dirty();
 							}),
 							prop("value", saved_post.url),
 						]),
@@ -735,17 +727,18 @@
 								saved_post.title,
 								saved_post.url,
 							);
-							this.app.fetched_posts.posts.push(post);
-							this.app.fetched_posts.dirty();
+							fetched_posts.posts.push(post);
+							fetched_posts.dirty();
 
 							// Clear the saved post
-							this.app.saved_post.title = "";
-							this.app.saved_post.url = "";
+							saved_post.title = "";
+							saved_post.url = "";
+							saved_post.dirty();
 						}),
 						"Submit",
 					]),
 					tree("hr", []),
-					this.renderChild(PostPreviewView, "preview", () => new PostPreviewView(this.app.saved_post)),
+					this.renderChild(PostPreviewView, "preview", () => new PostPreviewView(saved_post)),
 				]);
 			}
 		}
@@ -758,9 +751,9 @@
 			}
 
 			doRender() {
-				const { title, author, time, url, id, is_url_valid } = this.state;
+				const { title, author, time, url, id, is_url_valid } = this.state.subscribe();
 
-				return tree("div", `post_${id}`, [
+				return tree("div", `post_preview_for_${id}`, [
 					style("border", "1px solid"),
 					style("padding", "10px"),
 					tree("h2", [title.length > 0 ? title : "No title specified!"]),
