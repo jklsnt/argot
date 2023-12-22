@@ -20,14 +20,12 @@
 		//   Also ensure that externally unmounted nodes also discard their effects.
 		//
 		// - Make `tree` more flexible with input handling (should concatenate consecutive Texts,
-		//   support nested fragments, and should ignore `null` and `undefined`).
+		//   support nested fragments, and should properly cast types to something renderable).
 		//
 		// - Isolate renders from exceptions by rendering a fallback value.
 		//
 		// - Implement custom user events. These need not be bidirectionally destructive since it's
 		//   a user error to maintain a handler on a non-existent target.
-		//
-		// - Implement a standard property passing mechanism.
 		//
 		// ArgotUI To-Not-Do:
 		//
@@ -138,7 +136,7 @@
 		/**
 		 * Constructs a virtual DOM element.
 		 */
-		function tree(tag, key_or_children, children) {
+		function elem(tag, key_or_children, children) {
 			return children === undefined ?
 				new VirtualElement(tag, null, key_or_children.flat()) :
 				new VirtualElement(tag, key_or_children, children.flat());
@@ -459,28 +457,54 @@
 		const VIEW_CACHE = Symbol("VIEW_CACHE");
 		const DERIVED_MAP = Symbol("DERIVED_MAP");
 		const EMPTY_CACHE_SENTINEL = Symbol("EMPTY_CACHE_SENTINEL");
+		const BINDER_NAMESPACE = Symbol("BINDER_NAMESPACE");
+		const IS_RENDERING = Symbol("IS_RENDERING");
 
-		// Public
 		let RENDER_SCOPE = null;
 
+		// Public
 		class Component {
 			constructor() {
 				this[DEPENDENTS] = new Set();
 				this[VIEW_CACHE] = EMPTY_CACHE_SENTINEL;
 				this[DERIVED_MAP] = new Map();
+				this[IS_RENDERING] = false;
 			}
 
-			renderChild(namespace, key, ctor) {
+			deriveChild(namespace, key, ctor) {
 				let store = this[DERIVED_MAP].get(namespace);
 				if (store === undefined) {
 					store = new DerivedComponentMap();
 					this[DERIVED_MAP].set(namespace, store);
 				}
 
-				return store.fetch(key, ctor).render();
+				return store.fetch(key, ctor);
+			}
+
+			renderChild(namespace, key, ctor) {
+				return this.deriveChild(namespace, key, ctor).render();
+			}
+
+			deriveBinder(key, effect) {
+				return this.renderChild(BINDER_NAMESPACE, key, () => new ShortComponent(comp => {
+					// By default, components don't subscribe to their caller. However, because it
+					// is likely that this binder will access its parent state, we subscribe to it
+					// here.
+					this.subscribe();
+					effect(comp);
+				}));
 			}
 
 			dirty() {
+				// If we're actively being rendered, it is dangerous to clear the dependents list
+				// since, once `render` finishes, it'll set the cache without full knowledge of the
+				// dependent list. It is, however, safe to just ignore this entire node during the
+				// dirty DFS since the fact that we're actively rendering tells us that the previous
+				// dependency list was already processed.
+				if (this[IS_RENDERING]) {
+					return;
+				}
+
 				const old_deps = this[DEPENDENTS];
 				this[DEPENDENTS] = new Set();
 				this[VIEW_CACHE] = EMPTY_CACHE_SENTINEL;
@@ -490,13 +514,16 @@
 				}
 			}
 
+			dirtySet(key, value) {
+				if (this[key] !== value) {
+					this[key] = value;
+					this.dirty();
+				}
+			}
+
 			subscribe() {
 				if (RENDER_SCOPE !== null) {
 					this[DEPENDENTS].add(RENDER_SCOPE);
-				} else {
-					if (this.state !== undefined) {
-						console.trace(this);
-					}
 				}
 
 				return this;
@@ -507,6 +534,9 @@
 			}
 
 			render() {
+				// Render is not reentrant.
+				console.assert(!this[IS_RENDERING]);
+
 				// Ensure that people using this view in their view are invalidated when we invalidate
 				// ourselves.
 				this.subscribe();
@@ -521,9 +551,11 @@
 					// Render it
 					const parent_scope = RENDER_SCOPE;
 					try {
+						this[IS_RENDERING] = true;
 						RENDER_SCOPE = this;
 						this[VIEW_CACHE] = this.doRender();
 					} finally {
+						this[IS_RENDERING] = false;
 						RENDER_SCOPE = parent_scope;
 					}
 				}
@@ -558,14 +590,14 @@
 		}
 
 		// Short forms
-		class DerivedComponent extends Component {
+		class ShortComponent extends Component {
 			constructor(renderer) {
 				super();
 				this.renderer = renderer;
 			}
 
 			doRender() {
-				return this.renderer(this.renderChild.bind(this));
+				return this.renderer(this);
 			}
 		}
 
@@ -589,7 +621,7 @@
 				this.author = "[not specified]";
 				this.time = "[not specified]";
 
-				this.is_url_valid = new DerivedComponent(() => {
+				this.is_url_valid = new ShortComponent(() => {
 					try {
 						const url = new URL(this.subscribe().url);
 						return url.protocol === "http:" || url.protocol === "https:";
@@ -613,6 +645,8 @@
 
 				this.saved_post = new PostState("saved_post", "", "");
 				this.fetched_posts = new PostListState();
+
+				this.username = "Anonymous";
 			}
 
 			setView(id) {
@@ -626,31 +660,43 @@
 			}
 
 			doRender() {
-				return tree("div", [
+				this.deriveBinder("bind_username", comp => {
+					this.saved_post.dirtySet("author", this.username);
+				});
+
+				return elem("div", [
 					effect("configure_webpage", () => {
 						document.bgColor = "pink";
 					}),
-					tree("h1", ["Argot"]),
-					tree("p", [
-						tree("button", [
+					elem("h1", ["Argot"]),
+					elem("p", [
+						elem("button", [
 							prop("onclick", () => this.setView("home")),
 							style("color", this.view === "home" ? "red" : "inherit"),
 							"Home",
 						]),
 						"\u{202F}",
-						tree("button", [
+						elem("button", [
 							handler("click", () => this.setView("about")),
 							style("color", this.view === "about" ? "red" : "inherit"),
 							"About",
 						]),
 						"\u{202F}",
-						tree("button", [
+						elem("button", [
 							handler("click", () => this.setView("submit")),
 							style("color", this.view === "submit" ? "red" : "inherit"),
 							"Submit",
 						]),
+						"\u{202F}",
+						elem("button", [
+							handler("click", () => {
+								this.username = `user ${Math.floor(Math.random() * 100)}`;
+								this.dirty();
+							}),
+							"Fake Login Button",
+						]),
 					]),
-					tree("hr", []),
+					elem("hr", []),
 					this.view_comp.render(),
 				]);
 			}
@@ -665,7 +711,7 @@
 			doRender() {
 				const post_list = this.app.fetched_posts.subscribe().posts;
 
-				return tree("div", [
+				return elem("div", [
 					post_list.map(state => this.renderChild(
 						PostPreviewView,
 						state.id,
@@ -677,10 +723,10 @@
 
 		class AboutPage extends Component {
 			doRender() {
-				return tree("div", [
-					tree("p", ["Welcome to Argot! This is a super duper serious link sharing website for intellectuals! Nya~"]),
-					tree("img", [prop("src", "https://pbs.twimg.com/media/DT_YODIWkAEKH8X.jpg")]),
-					tree("p", ["Ferris The Crab~ This is so nya-tastic!!111"]),
+				return elem("div", [
+					elem("p", ["Welcome to Argot! This is a super duper serious link sharing website for intellectuals! Nya~"]),
+					elem("img", [prop("src", "https://pbs.twimg.com/media/DT_YODIWkAEKH8X.jpg")]),
+					elem("p", ["Ferris The Crab~ This is so nya-tastic!!111"]),
 				]);
 			}
 		}
@@ -695,12 +741,12 @@
 				const { saved_post, fetched_posts } = this.app;
 				saved_post.subscribe();
 
-				return tree("div", "submit_page", [
-					tree("h2", ["Submit your link here!"]),
-					tree("p", [
+				return elem("div", "submit_page", [
+					elem("h2", ["Submit your link here!"]),
+					elem("p", [
 						"Title:",
 						"\u{202F}",
-						tree("input", [
+						elem("input", [
 							handler("input", (e) => {
 								saved_post.title = e.target.value;
 								saved_post.dirty();
@@ -708,10 +754,10 @@
 							prop("value", saved_post.title),
 						]),
 					]),
-					tree("p", [
+					elem("p", [
 						"URL:",
 						"\u{202F}",
-						tree("input", [
+						elem("input", [
 							handler("input", (e) => {
 								saved_post.url = e.target.value;
 								saved_post.dirty();
@@ -719,7 +765,7 @@
 							prop("value", saved_post.url),
 						]),
 					]),
-					tree("button", [
+					elem("button", [
 						handler("click", target => {
 							// Create the post
 							const post = new PostState(
@@ -737,7 +783,7 @@
 						}),
 						"Submit",
 					]),
-					tree("hr", []),
+					elem("hr", []),
 					this.renderChild(PostPreviewView, "preview", () => new PostPreviewView(saved_post)),
 				]);
 			}
@@ -753,21 +799,21 @@
 			doRender() {
 				const { title, author, time, url, id, is_url_valid } = this.state.subscribe();
 
-				return tree("div", `post_preview_for_${id}`, [
+				return elem("div", `post_preview_for_${id}`, [
 					style("border", "1px solid"),
 					style("padding", "10px"),
-					tree("h2", [title.length > 0 ? title : "No title specified!"]),
-					tree("p", ["By ", tree("strong", [author]), ", posted ", tree("strong", [time])]),
-					tree("p", [
+					elem("h2", [title.length > 0 ? title : "No title specified!"]),
+					elem("p", ["By ", elem("strong", [author]), ", posted ", elem("strong", [time])]),
+					elem("p", [
 						url.length > 0 ?
 							(is_url_valid.render() ?
-								tree("a", [prop("href", url), url]) :
-								tree("span", [
-									tree("span", [style("color", "gray"), url]),
-									tree("span", [style("color", "red"), " - This URL is not valid"])
+								elem("a", [prop("href", url), url]) :
+								elem("span", [
+									elem("span", [style("color", "gray"), url]),
+									elem("span", [style("color", "red"), " - This URL is not valid"])
 								])
 							) :
-							tree("span", [style("color", "red"), "No URL specified!"]),
+							elem("span", [style("color", "red"), "No URL specified!"]),
 					]),
 				]);
 			}
