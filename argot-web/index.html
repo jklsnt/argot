@@ -13,25 +13,6 @@
 
 	<script>
 		// Hey, I heard you liked single page apps!
-		//
-		// ArgotUI To-Do:
-		//
-		// - Give effect runner a more consistent execution order and isolate it from exceptions.
-		//   Also ensure that externally unmounted nodes also discard their effects.
-		//
-		// - Make `tree` more flexible with input handling (should concatenate consecutive Texts,
-		//   support nested fragments, and should properly cast types to something renderable).
-		//
-		// - Isolate renders from exceptions by rendering a fallback value.
-		//
-		// - Implement custom user events. These need not be bidirectionally destructive since it's
-		//   a user error to maintain a handler on a non-existent target.
-		//
-		// ArgotUI To-Not-Do:
-		//
-		// - We don't need a custom component lifecycle model since, in all cases, defining a
-		//   fragment with effects will have the desired behavior.
-		//
 
 		// ====================================================================================
 		// We begin by defining a custom UI framework because all the other frameworks have the
@@ -457,7 +438,6 @@
 		const VIEW_CACHE = Symbol("VIEW_CACHE");
 		const DERIVED_MAP = Symbol("DERIVED_MAP");
 		const EMPTY_CACHE_SENTINEL = Symbol("EMPTY_CACHE_SENTINEL");
-		const BINDER_NAMESPACE = Symbol("BINDER_NAMESPACE");
 		const IS_RENDERING = Symbol("IS_RENDERING");
 
 		let RENDER_SCOPE = null;
@@ -478,40 +458,23 @@
 					this[DERIVED_MAP].set(namespace, store);
 				}
 
-				return store.fetch(key, ctor);
+				return store.fetch(key, ctor !== undefined ? ctor : () => new namespace());
 			}
 
-			renderChild(namespace, key, ctor) {
-				return this.deriveChild(namespace, key, ctor).render();
-			}
-
-			renderChildBound(namespace, key, ctor, binder) {
-				const child = this.deriveChild(namespace, key, () => {
-					const comp = ctor();
-
-					return new InlineComponent(me => {
-						this.subscribe();
-						me.deriveBinder("binder", cx => me.__custom_binder(comp, cx));
-
-						return comp.render();
-					});
-				});
-				// HACK: I'm too lazy to define a new component for this so "surprise type shape
-				//  extensions" it is!
-				child.__custom_binder = (a, b) => binder(a, b);
+			renderChild(namespace, key, effects, ctor) {
+				const child = this.deriveChild(namespace, key, ctor);
+				if (effects !== undefined) {
+					if (typeof effects === "function") {
+						effects(child);
+					} else if (typeof effects === "object") {
+						for (const key of Object.keys(effects)) {
+							child.dirtySet(key, effects[key]);
+						}
+					} else {
+						console.assert(false);
+					}
+				}
 				return child.render();
-			}
-
-			deriveBinder(key, effect) {
-				const comp = this.deriveChild(BINDER_NAMESPACE, key, () => new InlineComponent(null));
-				comp.renderer = comp => {
-					// By default, components don't subscribe to their caller. However, because it
-					// is likely that this binder will access its parent state, we subscribe to it
-					// here.
-					this.subscribe();
-					effect(comp);
-				};
-				comp.render();
 			}
 
 			dirty() {
@@ -587,6 +550,7 @@
 			constructor() {
 				this.persistent_cache = new Map();
 				this.to_delete = new Set();
+				this.auto_key_counter = 0;
 			}
 
 			begin() {
@@ -594,9 +558,14 @@
 					this.persistent_cache.delete(to_delete);
 				}
 				this.to_delete = new Set(this.persistent_cache.keys());
+				this.auto_key_counter = 0;
 			}
 
 			fetch(key, ctor) {
+				if (key == null) {
+					key = `auto_${this.auto_key_counter++}`;
+				}
+
 				this.to_delete.delete(key);
 				let value = this.persistent_cache.get(key);
 				if (value === undefined) {
@@ -681,9 +650,8 @@
 			doRender() {
 				const { username } = this;
 
-				this.deriveBinder("bind_username", comp => {
-					this.saved_post.dirtySet("author", username);
-				});
+				// Bind the author to the saved post.
+				this.saved_post.dirtySet("author", username);
 
 				return elem("div", [
 					effect("configure_webpage", () => {
@@ -737,6 +705,7 @@
 					post_list.map(state => this.renderChild(
 						PostPreviewView,
 						state.id,
+						() => { },
 						() => new PostPreviewView(state),
 					)),
 				]);
@@ -795,6 +764,7 @@
 								saved_post.title,
 								saved_post.url,
 							);
+							post.author = this.app.username;
 							fetched_posts.posts.push(post);
 							fetched_posts.dirty();
 
@@ -806,7 +776,7 @@
 						"Submit",
 					]),
 					elem("hr", []),
-					this.renderChild(PostPreviewView, "preview", () => new PostPreviewView(saved_post)),
+					this.renderChild(PostPreviewView, "preview", post => post.dirtySet("state", saved_post)),
 				]);
 			}
 		}
@@ -837,7 +807,20 @@
 							) :
 							elem("span", [style("color", "red"), "No URL specified!"]),
 					]),
+					this.renderChild(FunkyText, null, { text: url }),
+					this.renderChild(FunkyText, null, { text: url }),
 				]);
+			}
+		}
+
+		class FunkyText extends Component {
+			constructor(text) {
+				super();
+				this.text = "";
+			}
+
+			doRender() {
+				return elem("h1", [style("color", "red"), this.text]);
 			}
 		}
 
