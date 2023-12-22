@@ -452,6 +452,8 @@
 			}
 
 			deriveChild(namespace, key, ctor) {
+				console.assert(this[IS_RENDERING]);
+
 				let store = this[DERIVED_MAP].get(namespace);
 				if (store === undefined) {
 					store = new DerivedComponentMap();
@@ -807,20 +809,7 @@
 							) :
 							elem("span", [style("color", "red"), "No URL specified!"]),
 					]),
-					this.renderChild(FunkyText, null, { text: url }),
-					this.renderChild(FunkyText, null, { text: url }),
 				]);
-			}
-		}
-
-		class FunkyText extends Component {
-			constructor(text) {
-				super();
-				this.text = "";
-			}
-
-			doRender() {
-				return elem("h1", [style("color", "red"), this.text]);
 			}
 		}
 
