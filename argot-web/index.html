@@ -457,10 +457,14 @@
         const IS_RENDERING = Symbol("IS_RENDERING");
 
         let RENDER_SCOPE = null;
+        let DCM_KEY_GEN = 0;
 
         // Public
+        const DERIVED_KEY = Symbol("DERIVED_KEY");
+
         class Component {
             constructor() {
+                this[DERIVED_KEY] = null;
                 this[DEPENDENTS] = new Set();
                 this[VIEW_CACHE] = EMPTY_CACHE_SENTINEL;
                 this[DERIVED_MAP] = new Map();
@@ -485,6 +489,7 @@
 
             renderChild(namespace, key, effects, ctor) {
                 const child = this.deriveChild(namespace, key, ctor);
+
                 if (effects !== undefined) {
                     if (typeof effects === "function") {
                         effects(child);
@@ -494,6 +499,7 @@
                         console.assert(false);
                     }
                 }
+
                 return child.render();
             }
 
@@ -577,6 +583,7 @@
                 this.persistent_cache = new Map();
                 this.to_delete = new Set();
                 this.auto_key_counter = 0;
+                this.my_key = ++DCM_KEY_GEN;
             }
 
             begin() {
@@ -599,6 +606,10 @@
                     this.persistent_cache.set(key, value);
                 }
 
+                if (typeof value === "object" && DERIVED_KEY in value) {
+                    value[DERIVED_KEY] = `__derived_${this.my_key}_${key}`;
+                }
+
                 return value;
             }
         }
@@ -616,13 +627,66 @@
         }
 
         // ====================================================================================
+        // Okay! The UI framework is over but we still need some network connectivity features!
+        // ====================================================================================
+
+        const ASYNC_COMPLETED = Symbol("ASYNC_COMPLETED");
+        const ASYNC_PENDING = Symbol("ASYNC_PENDING");
+        const ASYNC_REJECTED = Symbol("ASYNC_REJECTED");
+
+        class AsyncRunner extends Component {
+            constructor() {
+                super();
+                this.abort_controller = new AbortController();
+                this.current_promise = null;
+                this.state = ASYNC_COMPLETED;
+                this.result = null;
+            }
+
+            get abort_signal() {
+                return this.abort_controller.signal;
+            }
+
+            get is_pending() {
+                return this.state === ASYNC_PENDING;
+            }
+
+            setTask(promise) {
+                // Replace the previous promise
+                this.abort_controller.abort();
+                this.current_promise = promise;
+                this.dirtySetMany({
+                    state: ASYNC_PENDING,
+                    resizeBy: null,
+                });
+
+                // Bind the promise's handlers (if it was already resolved, these will still be
+                // invoked)
+                promise.then(result => {
+                    if (this.current_promise === promise) {
+                        this.current_promise = null;
+                        this.state = ASYNC_COMPLETED;
+                        this.result = result;
+                        this.dirty();
+                    }
+                }).catch(result => {
+                    if (this.current_promise === promise) {
+                        this.current_promise = null;
+                        this.state = ASYNC_REJECTED;
+                        this.result = result;
+                        this.dirty();
+                    }
+                });
+            }
+        }
+
+        // ====================================================================================
         // Now, we can define the application's model.
         // ====================================================================================
 
         class ModelCompleteUserInfo extends Component {
             constructor() {
                 super();
-                this.id = "";
                 this.name = "";
                 this.bio = "";
             }
@@ -631,8 +695,11 @@
         class ModelEmbeddedUserInfo extends Component {
             constructor() {
                 super();
-                this.id = "";
                 this.name = "";
+            }
+
+            deserializeFrom(data) {
+                this.name = data;
             }
         }
 
@@ -640,17 +707,33 @@
             constructor() {
                 super();
                 this.meta = new ModelPostMeta();
-                this.info = new ModelPostDetails();
+                this.details = new ModelPostDetails();
             }
         }
 
         class ModelPostMeta extends Component {
             constructor() {
                 super();
+                this.id = "";
                 this.title = "";
-                this.short_description = "";
-                this.url = "";
+                this.content = "";
+                this.link = "";
+                this.private = false;
+                this.tags = [];
                 this.author = new ModelEmbeddedUserInfo();
+            }
+
+            deserializeFrom(data) {
+                this.dirtySetMany({
+                    id: data.id,
+                    title: data.title,
+                    content: data.content,
+                    link: data.link,
+                    private: data.private,
+                    tags: data.tags,
+                });
+
+                this.author.deserializeFrom(data.author);
             }
         }
 
@@ -680,12 +763,17 @@
                 super();
                 this.wip_post = new ModelPost();
                 this.posts = new ModelPostCollection();
+                this.post_loader = new AsyncRunner();
             }
 
             doRender() {
                 return elem("div", [
                     elem("h1", "Argot"),
                     elem("hr"),
+                    this.renderChild(ViewAsyncStatusDisplay, null, {
+                        loader: this.post_loader,
+                        loading_what: "posts",
+                    }),
                     this.posts.visible_posts.map(post => this.renderChild(ViewPostSummary, null, {
                         model: post,
                     })),
@@ -706,11 +794,28 @@
 
                 const meta = this.model.meta.subscribe();
 
-                return elem("div", [
-                    elem("h2", [fmtNotEmpty(meta.title, "<no title specified>")]),
-                    elem("a", [prop("href", meta.url), fmtNotEmpty(meta.url, "<no URL specified>")]),
-                    elem("p", fmtNotEmpty(meta.short_description, "<no description specified>")),
+                return elem("div", this[DERIVED_KEY], [
+                    elem("h2", fmtNotEmpty(meta.title, "<no title specified>")),
+                    elem("a", [prop("href", meta.link), fmtNotEmpty(meta.link, "<no link specified>")]),
+                    elem("p", fmtNotEmpty(meta.content, "<no description specified>")),
                 ]);
+            }
+        }
+
+        class ViewAsyncStatusDisplay extends Component {
+            constructor() {
+                super();
+                this.loader = null;
+                this.loading_what = "";
+            }
+
+            doRender() {
+                if (this.loader === null) return null;
+                const loader = this.loader.subscribe();
+
+                return loader.state === ASYNC_PENDING ? elem("p", this[DERIVED_KEY], `Loading ${this.loading_what}...`) :
+                    loader.state === ASYNC_REJECTED ? elem("p", this[DERIVED_KEY], `Failed to load ${this.loading_what}.`) :
+                        null;
             }
         }
 
