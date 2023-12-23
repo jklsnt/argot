@@ -341,14 +341,14 @@ def search_posts():
     posts = sorted(list(posts), key=ago)
     return [p.to_dict() for p in posts], 200
 
-@app.route("/comments/search", methods=["GET"])
+@app.route("/comments/search", methods=["PUT"])
 def search_comments():
     term = request.data.decode()    
     cs = Comment.select().where(Match(Comment.content, term))
     if not current_user.is_authenticated:
         cs = filter(lambda c: not c.private, cs)
-    comments = sorted(list(comments), key=ago)    
-    return [c.to_mini_dict() for c in cs], 200
+    cs = sorted(list(cs), key=ago)    
+    return [c.to_flat_dict() for c in cs], 200
 
 @app.route("/posts/query", methods=["PUT"])
 def query_posts():
