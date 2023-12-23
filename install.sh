@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
 
-createdb argot
-psql argot -f up.sql
+createdb argot -U postgres
+psql argot -f up.sql -U postgres
