@@ -188,7 +188,10 @@ def login():
 
     print(f"Logged in {user.nick}")
     login_user(user)
-    return "", 200
+    return {
+        "nick": user.nick,
+        "id": user.id,
+    }, 200
 
 @app.route("/signup", methods=["POST"])
 def signup():
