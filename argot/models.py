@@ -125,6 +125,7 @@ class Post(Model):
             "author": self.author_id.nick,
             "time": date_str(self.time),
             "content": self.content,
+            "num_comments": sum(c.tree_size() for c in self.comments),
             "tags": [t.tag_id.name for t in self.tags],
             "private": self.private
         }
@@ -189,3 +190,9 @@ class Comment(Model):
             "children": [c.to_mini_dict() for c in self.children],
             "private": self.private
         }        
+
+    def tree_size(self):
+        if len(self.children) == 0:
+            return 1
+        return sum(c.tree_size() for c in self.children)
+            
