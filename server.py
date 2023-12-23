@@ -25,11 +25,11 @@ def load_user(user_id):
     return User.select().where(User.id == int(user_id)).get()
 
 class PostSchema(Schema):
-    title = fields.Str()
-    link = fields.Url()
-    content = fields.Str()
-    private = fields.Bool()
-    # tags = fields.List(fields.Str())
+    title = fields.Str(required=True)
+    link = fields.Url(required=True)
+    content = fields.Str(required=True)
+    private = fields.Bool(required=True)
+    tags = fields.List(fields.Int(), required=True)
 
 class CommentSchema(Schema):
     post = fields.Int(required=True)
@@ -88,6 +88,23 @@ def update_post(post_id):
 
     return "", 200
 
+@app.route("/posts/<post_id>", methods=["DELETE"])
+@login_required
+def delete_post(post_id):
+    post_id = int(post_id)
+
+    if len(Post.select().where(Post.id == post_id)) == 0:
+        return f"A post with the ID {post_id} does not exist!", 404
+
+    post = Post.get(Post.id == post_id)
+    if post.author_id.id != current_user.id:
+        return "Not yours to delete!", 403    
+
+    TagMap.delete().where(TagMap.post_id == post_id).execute()    
+    post.delete_instance()
+    
+    return "", 200
+
 @app.route("/posts", methods=["POST"])
 @login_required
 def add_post():
@@ -108,14 +125,22 @@ def add_post():
     else:
         title = req["title"]
 
+    tags = list(set(req["tags"]))
+    for tag in tags:
+        if len(Tag.select().where(Tag.id == tag)) == 0:
+            return f"Tag {tag} doesn't exist.", 404
+
     p = Post.new(
-        req["link"] if "link" in req else None,
+        req["link"],
         title,
         current_user.id,
         content=req["content"],
-        private=req["private"] if "private" in req else False,
+        private=req["private"],
     )
 
+    for tag in tags:
+        TagMap.create(post_id=p.id, tag_id=tag)
+    
     return str(p.id), 200
 
 @app.route("/comments", methods=["POST"])
@@ -165,6 +190,27 @@ def update_comment(comment_id):
     
     return "", 200
 
+
+
+
+@app.route("/comments/<comment_id>", methods=["DELETE"])
+@login_required
+def delete_comment(comment_id):
+    comment_id = int(comment_id)
+
+    if len(Comment.select().where(Comment.id == comment_id)) == 0:
+        return f"A comment with the ID {comment_id} does not exist!", 404
+
+    comment = Comment.get(Comment.id == comment_id)
+    if comment.author_id.id != current_user.id:
+        return "Not yours to delete!", 403    
+    
+    comment.content = "[deleted]"
+    comment.save()
+    
+    return "", 200
+
+
 @app.route("/login", methods=["POST"])
 def login():
     req = request.json
@@ -188,7 +234,7 @@ def login():
 
     print(f"Logged in {user.nick}")
     login_user(user)
-    return "", 200
+    return {"nick": user.nick, "id": user.id}, 200
 
 @app.route("/signup", methods=["POST"])
 def signup():
