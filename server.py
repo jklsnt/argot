@@ -333,6 +333,7 @@ def search_posts():
     posts = Post.select().where(Match(Post.content, term))
     if not current_user.is_authenticated:
         posts = filter(lambda p: not p.private, posts)
+    posts = sorted(list(posts), key=ago)    
     return [p.to_dict() for p in posts], 200
 
 @app.route("/comments/search", methods=["GET"])
@@ -341,6 +342,7 @@ def search_comments():
     cs = Comment.select().where(Match(Comment.content, term))
     if not current_user.is_authenticated:
         cs = filter(lambda c: not c.private, cs)
+    comments = sorted(list(comments), key=ago)    
     return [c.to_mini_dict() for c in cs], 200
 
 @app.route("/posts/query", methods=["PUT"])
