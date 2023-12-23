@@ -285,7 +285,6 @@ def get_tags():
 def get_user(user_name):    
     query = User.select().where(User.nick == str(user_name))
     if len(query) == 0:
-        print(f"failed to find {str(user_name)}")
         return "No such user.", 404
     user = query.get()
     posts = sorted(user.posts, key=ago)
@@ -331,9 +330,15 @@ def add_post_tag(post_id):
 def search_posts():
     term = request.data.decode()    
     posts = Post.select().where(Match(Post.content, term))
+    posts_titles = Post.select().where(Match(Post.title, term))
+    posts_links = Post.select().where(Match(Post.link, term))
     if not current_user.is_authenticated:
-        posts = filter(lambda p: not p.private, posts)
-    posts = sorted(list(posts), key=ago)    
+        posts = list(filter(lambda p: not p.private, posts))
+        posts_titles = list(filter(lambda p: not p.private, posts_titles))
+        posts_links = list(filter(lambda p: not p.private, posts_links))
+
+    posts = list(set(posts+posts_titles+posts_links))    
+    posts = sorted(list(posts), key=ago)
     return [p.to_dict() for p in posts], 200
 
 @app.route("/comments/search", methods=["GET"])
@@ -403,7 +408,6 @@ def get_posts():
     # ps = itertools.islice(ps, page_size*page, page_size*(page+1))
 
     if not current_user.is_authenticated:
-        print("user not auth'd?")
         ps = filter(lambda p: not p.private, ps)
     
     return [p.to_dict() for p in ps], 200

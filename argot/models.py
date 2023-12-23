@@ -61,6 +61,8 @@ class User(UserMixin, Model):
             "bio": self.bio
         }
 
+    def __hash__(self):
+        return self.id
 
 class Post(Model):
     id = AutoField(primary_key=True)
@@ -181,7 +183,6 @@ class Comment(Model):
         }        
     
     def to_mini_dict(self):
-        print(self.time, self.content)
         return {
             "id": self.id,
             "author": self.author_id.nick,
