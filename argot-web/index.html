@@ -117,7 +117,7 @@
 		/**
 		 * Constructs a virtual DOM element.
 		 */
-		function tree(tag, key_or_children, children) {
+		function elem(tag, key_or_children, children) {
 			return children === undefined ?
 				new VirtualElement(tag, null, key_or_children.flat()) :
 				new VirtualElement(tag, key_or_children, children.flat());
@@ -438,28 +438,57 @@
 		const VIEW_CACHE = Symbol("VIEW_CACHE");
 		const DERIVED_MAP = Symbol("DERIVED_MAP");
 		const EMPTY_CACHE_SENTINEL = Symbol("EMPTY_CACHE_SENTINEL");
+		const IS_RENDERING = Symbol("IS_RENDERING");
+
+		let RENDER_SCOPE = null;
 
 		// Public
 		class Component {
 			constructor() {
-				Component.RENDER_SCOPE = null;
-
 				this[DEPENDENTS] = new Set();
 				this[VIEW_CACHE] = EMPTY_CACHE_SENTINEL;
 				this[DERIVED_MAP] = new Map();
+				this[IS_RENDERING] = false;
 			}
 
-			renderChild(namespace, key, ctor) {
+			deriveChild(namespace, key, ctor) {
+				console.assert(this[IS_RENDERING]);
+
 				let store = this[DERIVED_MAP].get(namespace);
 				if (store === undefined) {
 					store = new DerivedComponentMap();
 					this[DERIVED_MAP].set(namespace, store);
 				}
 
-				return store.fetch(key, ctor).render();
+				return store.fetch(key, ctor !== undefined ? ctor : () => new namespace());
+			}
+
+			renderChild(namespace, key, effects, ctor) {
+				const child = this.deriveChild(namespace, key, ctor);
+				if (effects !== undefined) {
+					if (typeof effects === "function") {
+						effects(child);
+					} else if (typeof effects === "object") {
+						for (const key of Object.keys(effects)) {
+							child.dirtySet(key, effects[key]);
+						}
+					} else {
+						console.assert(false);
+					}
+				}
+				return child.render();
 			}
 
 			dirty() {
+				// If we're actively being rendered, it is dangerous to clear the dependents list
+				// since, once `render` finishes, it'll set the cache without full knowledge of the
+				// dependent list. It is, however, safe to just ignore this entire node during the
+				// dirty DFS since the fact that we're actively rendering tells us that the previous
+				// dependency list was already processed.
+				if (this[IS_RENDERING]) {
+					return;
+				}
+
 				const old_deps = this[DEPENDENTS];
 				this[DEPENDENTS] = new Set();
 				this[VIEW_CACHE] = EMPTY_CACHE_SENTINEL;
@@ -469,9 +498,16 @@
 				}
 			}
 
+			dirtySet(key, value) {
+				if (this[key] !== value) {
+					this[key] = value;
+					this.dirty();
+				}
+			}
+
 			subscribe() {
-				if (Component.RENDER_SCOPE !== null) {
-					this[DEPENDENTS].add(Component.RENDER_SCOPE);
+				if (RENDER_SCOPE !== null) {
+					this[DEPENDENTS].add(RENDER_SCOPE);
 				}
 
 				return this;
@@ -482,6 +518,9 @@
 			}
 
 			render() {
+				// Render is not reentrant.
+				console.assert(!this[IS_RENDERING]);
+
 				// Ensure that people using this view in their view are invalidated when we invalidate
 				// ourselves.
 				this.subscribe();
@@ -494,12 +533,14 @@
 					}
 
 					// Render it
-					const parent_scope = Component.RENDER_SCOPE;
+					const parent_scope = RENDER_SCOPE;
 					try {
-						Component.RENDER_SCOPE = this;
+						this[IS_RENDERING] = true;
+						RENDER_SCOPE = this;
 						this[VIEW_CACHE] = this.doRender();
 					} finally {
-						Component.RENDER_SCOPE = parent_scope;
+						this[IS_RENDERING] = false;
+						RENDER_SCOPE = parent_scope;
 					}
 				}
 
@@ -511,6 +552,7 @@
 			constructor() {
 				this.persistent_cache = new Map();
 				this.to_delete = new Set();
+				this.auto_key_counter = 0;
 			}
 
 			begin() {
@@ -518,9 +560,14 @@
 					this.persistent_cache.delete(to_delete);
 				}
 				this.to_delete = new Set(this.persistent_cache.keys());
+				this.auto_key_counter = 0;
 			}
 
 			fetch(key, ctor) {
+				if (key == null) {
+					key = `auto_${this.auto_key_counter++}`;
+				}
+
 				this.to_delete.delete(key);
 				let value = this.persistent_cache.get(key);
 				if (value === undefined) {
@@ -532,6 +579,18 @@
 			}
 		}
 
+		// Short forms
+		class InlineComponent extends Component {
+			constructor(renderer) {
+				super();
+				this.renderer = renderer;
+			}
+
+			doRender() {
+				return this.renderer(this);
+			}
+		}
+
 		// ====================================================================================
 		// Now, we can define the application's model.
 		// ====================================================================================
@@ -539,28 +598,27 @@
 		class PostListState extends Component {
 			constructor() {
 				super();
-				this.posts = [new PostState("Look at this cool website!", "http://www.example.com")];
+				this.posts = [new PostState("post_0", "Look at this cool website!", "http://www.example.com")];
 			}
 		}
 
 		class PostState extends Component {
-			constructor(title, url) {
+			constructor(id, title, url) {
 				super();
+				this.id = id;
 				this.title = title;
+				this.url = url;
 				this.author = "[not specified]";
 				this.time = "[not specified]";
-				this.url = url;
-				this.id = "[not specified]";
-				this.validateUrl();
-			}
 
-			validateUrl() {
-				try {
-					const url = new URL(this.url);
-					this.is_url_valid = url.protocol === "http:" || url.protocol === "https:";
-				} catch (e) {
-					this.is_url_valid = false;
-				}
+				this.is_url_valid = new InlineComponent(() => {
+					try {
+						const url = new URL(this.subscribe().url);
+						return url.protocol === "http:" || url.protocol === "https:";
+					} catch (e) {
+						return false;
+					}
+				});
 			}
 		}
 
@@ -575,8 +633,10 @@
 				this.view = "home";
 				this.view_comp = new HomePage(this);
 
-				this.saved_post = new PostState("", "");
+				this.saved_post = new PostState("saved_post", "", "");
 				this.fetched_posts = new PostListState();
+
+				this.username = "Anonymous";
 			}
 
 			setView(id) {
@@ -590,31 +650,45 @@
 			}
 
 			doRender() {
-				return tree("div", [
+				const { username } = this;
+
+				// Bind the author to the saved post.
+				this.saved_post.dirtySet("author", username);
+
+				return elem("div", [
 					effect("configure_webpage", () => {
 						document.bgColor = "pink";
 					}),
-					tree("h1", ["Argot"]),
-					tree("p", [
-						tree("button", [
+					elem("h1", ["Argot"]),
+					elem("p", [
+						elem("button", [
 							prop("onclick", () => this.setView("home")),
 							style("color", this.view === "home" ? "red" : "inherit"),
 							"Home",
 						]),
 						"\u{202F}",
-						tree("button", [
+						elem("button", [
 							handler("click", () => this.setView("about")),
 							style("color", this.view === "about" ? "red" : "inherit"),
 							"About",
 						]),
 						"\u{202F}",
-						tree("button", [
+						elem("button", [
 							handler("click", () => this.setView("submit")),
 							style("color", this.view === "submit" ? "red" : "inherit"),
 							"Submit",
 						]),
+						"\u{202F}",
+						elem("button", [
+							handler("click", () => {
+								this.username = `user ${Math.floor(Math.random() * 100)}`;
+								this.dirty();
+							}),
+							"Fake Login Button",
+						]),
+						elem("strong", [" - ", username.toUpperCase()]),
 					]),
-					tree("hr", []),
+					elem("hr", []),
 					this.view_comp.render(),
 				]);
 			}
@@ -629,10 +703,11 @@
 			doRender() {
 				const post_list = this.app.fetched_posts.subscribe().posts;
 
-				return tree("div", [
+				return elem("div", [
 					post_list.map(state => this.renderChild(
 						PostPreviewView,
 						state.id,
+						() => { },
 						() => new PostPreviewView(state),
 					)),
 				]);
@@ -641,10 +716,10 @@
 
 		class AboutPage extends Component {
 			doRender() {
-				return tree("div", [
-					tree("p", ["Welcome to Argot! This is a super duper serious link sharing website for intellectuals! Nya~"]),
-					tree("img", [prop("src", "https://pbs.twimg.com/media/DT_YODIWkAEKH8X.jpg")]),
-					tree("p", ["Ferris The Crab~ This is so nya-tastic!!111"]),
+				return elem("div", [
+					elem("p", ["Welcome to Argot! This is a super duper serious link sharing website for intellectuals! Nya~"]),
+					elem("img", [prop("src", "https://pbs.twimg.com/media/DT_YODIWkAEKH8X.jpg")]),
+					elem("p", ["Ferris The Crab~ This is so nya-tastic!!111"]),
 				]);
 			}
 		}
@@ -656,14 +731,15 @@
 			}
 
 			doRender() {
-				const saved_post = this.app.saved_post.subscribe();
+				const { saved_post, fetched_posts } = this.app;
+				saved_post.subscribe();
 
-				return tree("div", "submit_page", [
-					tree("h2", ["Submit your link here!"]),
-					tree("p", [
+				return elem("div", "submit_page", [
+					elem("h2", ["Submit your link here!"]),
+					elem("p", [
 						"Title:",
 						"\u{202F}",
-						tree("input", [
+						elem("input", [
 							handler("input", (e) => {
 								saved_post.title = e.target.value;
 								saved_post.dirty();
@@ -671,36 +747,38 @@
 							prop("value", saved_post.title),
 						]),
 					]),
-					tree("p", [
+					elem("p", [
 						"URL:",
 						"\u{202F}",
-						tree("input", [
+						elem("input", [
 							handler("input", (e) => {
 								saved_post.url = e.target.value;
-								saved_post.validateUrl();
 								saved_post.dirty();
 							}),
 							prop("value", saved_post.url),
 						]),
 					]),
-					tree("button", [
+					elem("button", [
 						handler("click", target => {
 							// Create the post
-							const post = new PostState(saved_post.title, saved_post.url);
-							post.id = `local_post_${this.app.fetched_posts.posts.length}`;
-							this.app.fetched_posts.posts.push(post);
-							this.app.fetched_posts.dirty();
+							const post = new PostState(
+								`post_${this.app.fetched_posts.posts.length}`,
+								saved_post.title,
+								saved_post.url,
+							);
+							post.author = this.app.username;
+							fetched_posts.posts.push(post);
+							fetched_posts.dirty();
 
 							// Clear the saved post
-							this.app.saved_post.title = "";
-							this.app.saved_post.url = "";
-							this.app.saved_post.validateUrl();
-							this.app.saved_post.dirty();
+							saved_post.title = "";
+							saved_post.url = "";
+							saved_post.dirty();
 						}),
 						"Submit",
 					]),
-					tree("hr", []),
-					this.renderChild(PostPreviewView, "preview", () => new PostPreviewView(this.app.saved_post)),
+					elem("hr", []),
+					this.renderChild(PostPreviewView, "preview", post => post.dirtySet("state", saved_post)),
 				]);
 			}
 		}
@@ -715,21 +793,21 @@
 			doRender() {
 				const { title, author, time, url, id, is_url_valid } = this.state.subscribe();
 
-				return tree("div", `post_${id}`, [
+				return elem("div", `post_preview_for_${id}`, [
 					style("border", "1px solid"),
 					style("padding", "10px"),
-					tree("h2", [title.length > 0 ? title : "No title specified!"]),
-					tree("p", ["By ", tree("strong", [author]), ", posted ", tree("strong", [time])]),
-					tree("p", [
+					elem("h2", [title.length > 0 ? title : "No title specified!"]),
+					elem("p", ["By ", elem("strong", [author]), ", posted ", elem("strong", [time])]),
+					elem("p", [
 						url.length > 0 ?
-							(is_url_valid ?
-								tree("a", [prop("href", url), url]) :
-								tree("span", [
-									tree("span", [style("color", "gray"), url]),
-									tree("span", [style("color", "red"), " - This URL is not valid"])
+							(is_url_valid.render() ?
+								elem("a", [prop("href", url), url]) :
+								elem("span", [
+									elem("span", [style("color", "gray"), url]),
+									elem("span", [style("color", "red"), " - This URL is not valid"])
 								])
 							) :
-							tree("span", [style("color", "red"), "No URL specified!"]),
+							elem("span", [style("color", "red"), "No URL specified!"]),
 					]),
 				]);
 			}
