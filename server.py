@@ -24,6 +24,9 @@ login_manager.init_app(app)
 def load_user(user_id):
     return User.select().where(User.id == int(user_id)).get()
 
+def ago(x):
+    return datetime.now()-x.time
+
 class PostSchema(Schema):
     title = fields.Str(required=True)
     link = fields.Url(required=True)
@@ -275,7 +278,7 @@ def add_tag(name):
 
 @app.route("/tags", methods=["GET"])
 def get_tags():
-    out = [{"name": t.name, "id": t.id} for t in Tag.select()]
+    out = [{"name": t.name, "id": t.id} for t in Tag.select()]    
     return out, 200
 
 @app.route("/users/<user_name>", methods=["GET"])
@@ -285,8 +288,8 @@ def get_user(user_name):
         print(f"failed to find {str(user_name)}")
         return "No such user.", 404
     user = query.get()
-    posts = user.posts
-    comments = user.comments
+    posts = sorted(user.posts, key=ago)
+    comments = sorted(user.comments, key=ago)
     if not current_user.is_authenticated:
         posts = filter(lambda p: not p.private, posts)
         comments = filter(lambda c: not c.private, comments)
