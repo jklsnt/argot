@@ -201,7 +201,12 @@ def get_inbox():
 @login_required
 def mark_read(comment_id):
     try:
-        notifs[current_user.id].remove(int(comment_id))
+        to_remove = None
+        for c in notifs[current_user.id]:
+            if c.id == int(comment_id):
+                to_remove = c
+                break
+        notifs[current_user.id].remove(to_remove)
         return "", 200
     except KeyError:
         return "Not in inbox!", 404
