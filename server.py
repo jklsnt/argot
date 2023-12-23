@@ -13,6 +13,7 @@ import sys
 
 from bs4 import BeautifulSoup
 import urllib
+from collections import defaultdict
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = "uh idk whats secret"
@@ -52,7 +53,9 @@ class SignupSchema(Schema):
     password = fields.Str(required=True)
     bio = fields.Str()
     email = fields.Email()
-    
+
+notifs = defaultdict(set)
+
 @app.route("/posts/<post_id>", methods=["GET"])
 def get_post(post_id):
     post_id = int(post_id)
@@ -66,6 +69,14 @@ def get_post(post_id):
     p["comments"] = cs
 
     return p, 200
+
+@app.route("/comments/<comment_id>", methods=["GET"])
+def get_comment(comment_id):
+    comment_id = int(comment_id)
+    if len(Comment.select().where(Comment.id == comment_id)) == 0:
+        return f"A comment with the ID {comment_id} does not exist!", 404
+    c = Comment.select().where(Comment.id == comment_id).get().to_dict()
+    return c.to_flat_dict(), 200
 
 @app.route("/posts/<post_id>", methods=["PUT"])
 def update_post(post_id):
@@ -172,7 +183,33 @@ def add_comment():
         private=req["private"] if "private" in req else False,
     )
 
+    if "parent" in req:
+        notifs[int(req["parent"])].append(c.id)
+    else:
+        orig_author = Post.select().where(Post.id == req['post']).get().author_id
+        notifs[author_id].append(c.id)
+
     return str(c.id), 200
+
+
+@app.route("/inbox", methods=["GET"])
+@login_required
+def get_inbox():
+    return list(notifs[current_user]), 200
+
+@app.route("/inbox/read/<comment_id>", methods=["POST"])
+@login_required
+def mark_read(comment_id):
+    try:
+        notifs[current_user].remove(int(comment_id))
+        return "", 200
+    except KeyError:
+        return "Not in inbox!", 404
+
+@app.route("/inbox/size", methods=["GET"])
+@login_required
+def get_inbox_sz():
+    return len(notifs[current_user]), 200
 
 @app.route("/comments/<comment_id>", methods=["PUT"])
 @login_required
@@ -192,9 +229,6 @@ def update_comment(comment_id):
     c.save()
     
     return "", 200
-
-
-
 
 @app.route("/comments/<comment_id>", methods=["DELETE"])
 @login_required
