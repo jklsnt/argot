@@ -184,24 +184,24 @@ def add_comment():
     )
 
     if "parent" in req:
-        notifs[int(req["parent"])].append(c.id)
+        orig_author = Comment.select().where(Comment.id == req['parent']).get().author_id.id
     else:
-        orig_author = Post.select().where(Post.id == req['post']).get().author_id
-        notifs[author_id].append(c.id)
-
+        orig_author = Post.select().where(Post.id == req['post']).get().author_id.id
+    if orig_author != current_user.id:
+        notifs[orig_author].add(c)
     return str(c.id), 200
 
 
 @app.route("/inbox", methods=["GET"])
 @login_required
 def get_inbox():
-    return list(notifs[current_user]), 200
+    return [c.to_flat_dict() for c in list(notifs[current_user.id])], 200
 
 @app.route("/inbox/read/<comment_id>", methods=["POST"])
 @login_required
 def mark_read(comment_id):
     try:
-        notifs[current_user].remove(int(comment_id))
+        notifs[current_user.id].remove(int(comment_id))
         return "", 200
     except KeyError:
         return "Not in inbox!", 404
@@ -209,7 +209,7 @@ def mark_read(comment_id):
 @app.route("/inbox/size", methods=["GET"])
 @login_required
 def get_inbox_sz():
-    return len(notifs[current_user]), 200
+    return {"size": len(notifs[current_user.id])}, 200
 
 @app.route("/comments/<comment_id>", methods=["PUT"])
 @login_required
