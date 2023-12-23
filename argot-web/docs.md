@@ -307,9 +307,10 @@ And that's it! Now go! Become webshit programmers!
 
 ## Argot To-Do List
 
+- [x] Make `elem` properly normalize its input
+- [x] Add a shorthand memoization API
 - [ ] Make `render` more exception-safe
 - [ ] Ensure that `render` always runs hooks in a consistent manner and that they aren't interspersed with other volatile reconciliation code
 - [ ] Ensure that effects are properly unmounted when the DOM node is destroyed externally
 - [ ] Implement error absorption for components
-- [ ] Make `elem` properly normalize its input
 - [ ] Add more shorthand effects
