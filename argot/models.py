@@ -7,24 +7,24 @@ from peewee import *
 from playhouse.postgres_ext import *
 from flask_login import UserMixin
 
-def date_str(dt):
-    """Scuffed func to convert datetime to relative time in natural language.
-    E.g. dt -> '3 hours ago'
-    It's 2:27 AM as I write this so cut me some slack.
-    """    
-    now = datetime.now()
-    diff = now - dt
-    if diff.days != 0:
-        return f"{diff.days} day{'' if diff.days == 1 else 's'} ago"
-    if diff.seconds >= 3600:
-        hours = diff.seconds//3600
-        return f"{hours} hour{'' if hours == 1 else 's'} ago"
-    if diff.seconds >= 60:
-        mins = diff.seconds//60
-        return f"{mins} minute{'' if mins == 1 else 's'} ago"
-    if diff.seconds >= 0:
-        return f"{diff.seconds} second{'' if diff.seconds == 1 else 's'} ago"
-    return "just now" # you don't need microsecond precision.
+# def date_str(dt):
+#     """Scuffed func to convert datetime to relative time in natural language.
+#     E.g. dt -> '3 hours ago'
+#     It's 2:27 AM as I write this so cut me some slack.
+#     """    
+#     now = datetime.now()
+#     diff = now - dt
+#     if diff.days != 0:
+#         return f"{diff.days} day{'' if diff.days == 1 else 's'} ago"
+#     if diff.seconds >= 3600:
+#         hours = diff.seconds//3600
+#         return f"{hours} hour{'' if hours == 1 else 's'} ago"
+#     if diff.seconds >= 60:
+#         mins = diff.seconds//60
+#         return f"{mins} minute{'' if mins == 1 else 's'} ago"
+#     if diff.seconds >= 0:
+#         return f"{diff.seconds} second{'' if diff.seconds == 1 else 's'} ago"
+#     return "just now" # you don't need microsecond precision.
 
 
 db = PostgresqlExtDatabase('argot', host="/var/run/postgresql")
@@ -125,7 +125,7 @@ class Post(Model):
             "title": self.title,
             "link": self.link,
             "author": self.author_id.nick,
-            "time": date_str(self.time),
+            "time": self.time.timestamp(),
             "content": self.content,
             "num_comments": sum(c.tree_size() for c in self.comments),
             "tags": [t.tag_id.name for t in self.tags],
@@ -177,7 +177,7 @@ class Comment(Model):
             "id": self.id,
             "post_id": self.post_id.id,
             "author": self.author_id.nick,
-            "time": date_str(self.time),
+            "time": self.time.timestamp(),
             "content": self.content,
             "private": self.private
         }        
@@ -186,7 +186,7 @@ class Comment(Model):
         return {
             "id": self.id,
             "author": self.author_id.nick,
-            "time": date_str(self.time),
+            "time": self.time.timestamp(),
             "content": self.content,
             "children": [c.to_mini_dict() for c in self.children],
             "private": self.private
