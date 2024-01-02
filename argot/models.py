@@ -29,9 +29,12 @@ from flask_login import UserMixin
 
 db = PostgresqlExtDatabase('argot', host="/var/run/postgresql")
 
-class User(UserMixin, Model):
+class BaseModel(Model):
     class Meta:
         database = db
+
+class User(UserMixin, BaseModel):
+    class Meta(BaseModel.Meta):
         table_name = "users"
 
     id = AutoField(primary_key=True)
@@ -64,7 +67,7 @@ class User(UserMixin, Model):
     def __hash__(self):
         return self.id
 
-class Post(Model):
+class Post(BaseModel):
     id = AutoField(primary_key=True)
     title = TextField(null=True)
     link = TextField(null=True)
@@ -73,8 +76,7 @@ class Post(Model):
     content = TextField(null=True)
     private = BooleanField()
 
-    class Meta:
-        database = db
+    class Meta(BaseModel.Meta):
         table_name = "posts"
 
     def new(link, title, author, time=None, content=None, tags=None, private=False):
@@ -132,24 +134,22 @@ class Post(Model):
             "private": self.private
         }
 
-class Tag(Model):
+class Tag(BaseModel):
     id = AutoField(primary_key=True)
     name = TextField()
 
-    class Meta:
-        database = db
+    class Meta(BaseModel.Meta):
         table_name = "tags"
 
-class TagMap(Model):
+class TagMap(BaseModel):
     id = AutoField(primary_key=True)
     post_id = ForeignKeyField(Post, backref="tags")
     tag_id = ForeignKeyField(Tag, backref="posts")
 
-    class Meta:
-        database = db
+    class Meta(BaseModel.Meta):
         table_name = "tagmaps"
 
-class Comment(Model):
+class Comment(BaseModel):
     id = AutoField(primary_key=True)
     time = DateTimeField()
     post_id = ForeignKeyField(Post, backref="comments")
@@ -158,8 +158,7 @@ class Comment(Model):
     content = TextField()
     private = BooleanField()
 
-    class Meta:
-        database = db
+    class Meta(BaseModel.Meta):
         table_name = "comments"
 
     def new(post, author, content, parent=None, time=None, private=False):

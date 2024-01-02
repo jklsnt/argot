@@ -1,6 +1,6 @@
 # Argonaut
 
-An synergetic web-framework for business-critical single-file applications
+A synergetic web-framework for business-critical single-file applications
 
 There are two major components to Argonaut: DOM reconciliation and virtual-DOM memoization.
 
