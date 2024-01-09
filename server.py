@@ -15,11 +15,23 @@ from bs4 import BeautifulSoup
 import urllib
 from collections import defaultdict
 
+import discord
+from discord.ext import tasks
+from dotenv import dotenv_values
+import time
+config = dotenv_values(".env")
+
+import threading
+
 app = Flask(__name__)
 app.config["SECRET_KEY"] = "uh idk whats secret"
 CORS(app, supports_credentials=True)
 login_manager = LoginManager()
 login_manager.init_app(app)
+
+intents = discord.Intents.default()
+intents.message_content = True
+client = discord.Client(intents=intents)
 
 @login_manager.user_loader
 def load_user(user_id):
@@ -54,7 +66,11 @@ class SignupSchema(Schema):
     bio = fields.Str()
     email = fields.Email()
 
-notifs = defaultdict(set)
+# notifs = defaultdict(set)
+
+CHANNEL = 1194118320660680846
+new_posts = []
+posts_lock = threading.Lock()
 
 @app.route("/posts/<post_id>", methods=["GET"])
 def get_post(post_id):
@@ -154,7 +170,11 @@ def add_post():
 
     for tag in tags:
         TagMap.create(post_id=p.id, tag_id=tag)
-    
+
+    posts_lock.acquire();
+    new_posts.append(p.id)
+    posts_lock.release()
+        
     return str(p.id), 200
 
 @app.route("/comments", methods=["POST"])
@@ -187,34 +207,34 @@ def add_comment():
         orig_author = Comment.select().where(Comment.id == req['parent']).get().author_id.id
     else:
         orig_author = Post.select().where(Post.id == req['post']).get().author_id.id
-    if orig_author != current_user.id:
-        notifs[orig_author].add(c)
+    # if orig_author != current_user.id:
+    #     notifs[orig_author].add(c)
     return str(c.id), 200
 
 
-@app.route("/inbox", methods=["GET"])
-@login_required
-def get_inbox():
-    return [c.to_flat_dict() for c in list(notifs[current_user.id])], 200
+# @app.route("/inbox", methods=["GET"])
+# @login_required
+# def get_inbox():
+#     return [c.to_flat_dict() for c in list(notifs[current_user.id])], 200
 
-@app.route("/inbox/read/<comment_id>", methods=["POST"])
-@login_required
-def mark_read(comment_id):
-    try:
-        to_remove = None
-        for c in notifs[current_user.id]:
-            if c.id == int(comment_id):
-                to_remove = c
-                break
-        notifs[current_user.id].remove(to_remove)
-        return "", 200
-    except KeyError:
-        return "Not in inbox!", 404
+# @app.route("/inbox/read/<comment_id>", methods=["POST"])
+# @login_required
+# def mark_read(comment_id):
+#     try:
+#         to_remove = None
+#         for c in notifs[current_user.id]:
+#             if c.id == int(comment_id):
+#                 to_remove = c
+#                 break
+#         notifs[current_user.id].remove(to_remove)
+#         return "", 200
+#     except KeyError:
+#         return "Not in inbox!", 404
 
-@app.route("/inbox/size", methods=["GET"])
-@login_required
-def get_inbox_sz():
-    return {"size": len(notifs[current_user.id])}, 200
+# @app.route("/inbox/size", methods=["GET"])
+# @login_required
+# def get_inbox_sz():
+#     return {"size": len(notifs[current_user.id])}, 200
 
 @app.route("/comments/<comment_id>", methods=["PUT"])
 @login_required
@@ -451,5 +471,49 @@ def get_posts():
     
     return [p.to_dict() for p in ps], 200
 
+# @client.event
+# async def on_guild_join(guild):
+#     pass
+
+# @client.event
+# async def on_guild_remove(guild):
+#     pass
+
+
+def post_to_embed(p):
+    embed = discord.Embed(
+        title=p.title,
+        url=p.link,
+        description=f"{p.content}\n\n[(discuss)](https://argot.jklsnt.com/posts/{p.id})"
+    )
+    embed.set_author(name=p.author_id.nick, url=f"https://argot.jklsnt.com/users/{p.author_id.nick}")
+    if len(p.tags) != 0:
+        embed.add_field(name="tags", value=", ".join([t.tag_id.name for t in p.tags]))
+    return embed
+
+@tasks.loop(seconds=1.0)
+async def notify_people():
+    global new_posts
+    if posts_lock.acquire(blocking=False):
+        try:
+            for i in new_posts:
+                p = Post.select().where(Post.id == i).get()
+                embed = post_to_embed(p)
+                await client.get_channel(CHANNEL).send(embed=embed)
+            new_posts = []
+        except:
+            # Don't die with the lock on us. That'd be bad.
+            pass
+        posts_lock.release()
+    
+@client.event
+async def on_ready():    
+    await client.wait_until_ready()
+    notify_people.start()
+
 if __name__ == '__main__':
+    bot = threading.Thread(target=lambda: client.run(config["DISCORD_SECRET"]))    
+    bot.start()        
     app.run(debug=True)
+
+    
