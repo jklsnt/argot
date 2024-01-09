@@ -75,9 +75,11 @@ posts_lock = threading.Lock()
 @app.route("/posts/<post_id>", methods=["GET"])
 def get_post(post_id):
     post_id = int(post_id)
-    if len(Post.select().where(Post.id == post_id)) == 0:
+    if len(Post.select().where(Post.id == post_id)) == 0 :
         return f"A post with the ID {post_id} does not exist!", 404
     p = Post.select().where(Post.id == post_id).get().to_dict()
+    if p["private"] == True and not current_user.is_authenticated:
+        return f"A post with the ID {post_id} does not exist!", 404
     cs = Comment.select().where((Comment.post_id == post_id) & (Comment.parent_id == None))
     if not current_user.is_authenticated:
         cs = filter(lambda c: not c.private, cs)
@@ -295,7 +297,8 @@ def login():
         return "Invalid password.", 403
 
     print(f"Logged in {user.nick}")
-    login_user(user)
+    # TODO look into REMEMBER_COOKIE_DURATION
+    login_user(user, remember=True)
     return {"nick": user.nick, "id": user.id}, 200
 
 @app.route("/signup", methods=["POST"])
